@@ -800,26 +800,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           models: status.models,
           currentModelId: status.currentModelId,
         })
-        const remote = await fetchSessions()
-        if (cancelled) return
-        dispatch({ type: 'merge-remote', sessions: remote })
-        const storedId = loadState()?.activeSessionId
-        if (storedId && remote.some((s) => s.id === storedId)) {
-          const hit = remote.find((s) => s.id === storedId)
-          dispatch({ type: 'select-session', id: storedId })
-          if (hit) {
-            void hydrate({
-              id: hit.id,
-              title: hit.title,
-              projectId: null,
-              cwd: hit.cwd,
-              createdAt: hit.updatedAt,
-              updatedAt: hit.updatedAt,
-              messages: [],
-              source: 'grok',
-            })
-          }
-        }
         await refreshGit(stateRef.current.projects)
       } catch (err) {
         if (cancelled) return
@@ -833,7 +813,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [hydrate, refreshGit])
+  }, [refreshGit])
 
   useEffect(() => {
     return () => {

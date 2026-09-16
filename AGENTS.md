@@ -40,7 +40,7 @@ Node 20+。栈：Vite 8 + React 19 + TypeScript。无 UI 库，样式在 `src/in
 | `src/lib/agent.ts` | 浏览器调 `/api/*` |
 | `src/lib/title.ts` | 标题：手动重命名 > 首条用户消息 > grok 自动标题 |
 | `src/types.ts` | 项目 / 会话 / 权限 / 模型 / 思考强度 / 等候队列 |
-| `src/data/seed.ts` | 初始项目列表（会话来自 grok） |
+| `src/data/seed.ts` | 发布分支为空；个人 `master` 可有本机项目样例 |
 | `src/lib/storage.ts` | `localStorage` 键 `grok-build-web.v5` |
 | `src/components/Sidebar.tsx` | 侧栏：项目手风琴、会话、搜索、用户菜单 |
 | `src/components/ChatPane.tsx` | 空状态 + 文档流 + 连接状态 |

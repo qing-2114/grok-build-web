@@ -4,13 +4,19 @@
 
 `npm run dev` 会拉起 `grok agent --no-leader stdio`，通过 ACP 把流式回复、工具调用、项目目录和 git 分支接到浏览器。
 
-![空白工作台](docs/screenshots/workbench.png)
+## 快速安装
+
+把下面这段交给智能体（100 字以内）：
+
+> 克隆本仓库，执行 npm install 与 npm run dev。用 public/grok-icon.ico 作图标，在桌面创建指向 scripts/open-grok-build.ps1 的快捷方式，用于启动服务并打开网页。
 
 ## 你需要什么
 
 - [Node.js](https://nodejs.org/) 20 或更高
-- 已安装并登录的 [Grok Build](https://x.ai) CLI（终端里能跑 `grok --version`）
+- 本机已配置好的 [Grok Build](https://x.ai) CLI（终端能执行 `grok --version`）
 - Chromium 内核浏览器（文件夹选择器用得到）
+
+![空白工作台](docs/screenshots/workbench.png)
 
 ## 部署
 
@@ -48,9 +54,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "你
 
 界面会显示 **本机未连接**，发送会失败并提示。请确认：
 
-1. `grok --version` 能跑
-2. 已经 `grok login`（或本机默认模型有可用密钥）
-3. 重启 `npm run dev` 后再硬刷新（Ctrl+F5）
+1. 本机 Grok Build CLI 已配置好（`grok --version` 可用）
+2. 重启 `npm run dev` 后再硬刷新（Ctrl+F5）
 
 ## 界面约定
 
@@ -60,5 +65,3 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "你
 - 生成中可暂停；再输入发送会进入等候列表
 
 项目和个人资料存在浏览器 `localStorage` 键 `grok-build-web.v5`。会话正文由本机 grok 存在 `~/.grok/sessions`。
-
-给代理看的说明在 `AGENTS.md`。

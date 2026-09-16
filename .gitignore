@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 .verify/
+AGENTS.md
+handoff.md
 
 # Editor directories and files
 .vscode/*

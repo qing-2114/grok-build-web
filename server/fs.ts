@@ -200,6 +200,92 @@ function mimeOf(name: string): string {
   return 'text/plain; charset=utf-8'
 }
 
+function isNotFound(err: unknown): boolean {
+  return Boolean(
+    err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: string }).code === 'ENOENT',
+  )
+}
+
+function missingError(kind: 'file' | 'dir'): Error {
+  return new Error(kind === 'dir' ? '找不到该文件夹' : '找不到该文件')
+}
+
+const SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  '.next',
+  '.cache',
+  'coverage',
+  '.tmp',
+  '.tmp-verify',
+  '__pycache__',
+  '.grok',
+])
+
+async function findByName(
+  root: string,
+  name: string,
+  relativeHint: string,
+): Promise<string[]> {
+  const needle = name.toLowerCase()
+  const hint = relativeHint.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
+  const hits: string[] = []
+  let scanned = 0
+  const limit = 4000
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (hits.length >= 16 || scanned >= limit || depth > 10) return
+    let items
+    try {
+      items = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const it of items) {
+      if (hits.length >= 16 || scanned >= limit) return
+      scanned += 1
+      const p = resolve(dir, it.name)
+      if (it.isDirectory()) {
+        if (SKIP_DIRS.has(it.name)) continue
+        await walk(p, depth + 1)
+        continue
+      }
+      if (!it.isFile() || it.name.toLowerCase() !== needle) continue
+      if (hint && hint.includes('/')) {
+        const rel = relative(root, p).replace(/\\/g, '/').toLowerCase()
+        if (rel !== hint && !rel.endsWith(`/${hint}`)) continue
+      }
+      hits.push(p)
+    }
+  }
+
+  await walk(root, 0)
+  return hits
+}
+
+async function locateExisting(root: string, target: string): Promise<string> {
+  const base = normalizeFsPath(root) || homedir()
+  const abs = resolveInRoot(base, target)
+  try {
+    const st = await stat(abs)
+    if (st.isDirectory()) throw new Error('这是文件夹')
+    return abs
+  } catch (err) {
+    if (!isNotFound(err)) throw err
+  }
+  const name = basename(target.trim().replace(/[\\/]+$/, ''))
+  if (!name) throw missingError('file')
+  const hits = await findByName(base, name, target.trim())
+  if (hits.length === 1) return hits[0]
+  if (hits.length === 0) throw missingError('file')
+  hits.sort((a, b) => a.length - b.length)
+  return hits[0]
+}
+
 function ancestorsOf(root: string, abs: string): string[] {
   const base = normalizeFsPath(root)
   const rel = relative(base, abs)
@@ -217,7 +303,13 @@ function ancestorsOf(root: string, abs: string): string[] {
 export async function listDir(dir: string): Promise<FsEntry[]> {
   const root = normalizeFsPath(dir)
   if (!root) throw new Error('缺少路径')
-  const st = await stat(root)
+  let st: Awaited<ReturnType<typeof stat>>
+  try {
+    st = await stat(root)
+  } catch (err) {
+    if (isNotFound(err)) throw missingError('dir')
+    throw err
+  }
   if (!st.isDirectory()) throw new Error('不是文件夹')
   const items = await readdir(root, { withFileTypes: true })
   const out: FsEntry[] = []
@@ -267,7 +359,7 @@ export async function readPreview(
   target: string,
 ): Promise<FilePreview> {
   const base = normalizeFsPath(root) || homedir()
-  const abs = resolveInRoot(base, target)
+  const abs = await locateExisting(base, target)
   const st = await stat(abs)
   if (st.isDirectory()) throw new Error('这是文件夹')
   const name = basename(abs)
@@ -386,7 +478,7 @@ export async function streamRaw(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const abs = resolveInRoot(root, target)
+  const abs = await locateExisting(root, target)
   const st = await stat(abs)
   if (st.isDirectory()) throw new Error('这是文件夹')
   const mime = mimeOf(basename(abs))

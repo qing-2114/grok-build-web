@@ -36,9 +36,57 @@ export function looksLikeFilePath(value: string): boolean {
   return false
 }
 
+export function pathKey(path: string): string {
+  return path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+}
+
 export function samePath(a: string, b: string): boolean {
-  return a.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase() ===
-    b.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+  return pathKey(a) === pathKey(b)
+}
+
+export function isAbsPath(value: string): boolean {
+  const s = value.trim()
+  return /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(s)
+}
+
+/** True when `to` is the same path, or an absolute path that `from` (relative/basename) resolved to. */
+export function pathResolvesTo(from: string, to: string): boolean {
+  if (!from || !to) return false
+  if (samePath(from, to)) return true
+  if (isAbsPath(from)) return false
+  const a = pathKey(from)
+  const b = pathKey(to)
+  return b.endsWith(`\\${a}`)
+}
+
+/**
+ * Turn a chat link (`文章目录.md` or `文章\\文章目录.md`) into a concrete path.
+ * Prefers the newest matching tool-card target, then `cwd` + relative.
+ */
+export function resolveOpenPath(
+  requested: string,
+  cwd: string,
+  hints: Iterable<string> = [],
+): string {
+  const raw = requested.trim().replace(/^file:\/\//i, '').replace(/^<|>$/g, '')
+  if (!raw || isWebUrl(raw)) return raw
+  if (isAbsPath(raw)) return raw
+  const want = pathKey(raw)
+  const wantName = fileName(raw).toLowerCase()
+  const list = [...hints]
+  for (let i = list.length - 1; i >= 0; i--) {
+    const hint = list[i]?.trim()
+    if (!hint || !looksLikeFilePath(hint)) continue
+    const key = pathKey(hint)
+    if (key === want || key.endsWith(`\\${want}`)) return hint
+  }
+  if (!raw.includes('/') && !raw.includes('\\')) {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const hint = list[i]?.trim()
+      if (hint && fileName(hint).toLowerCase() === wantName) return hint
+    }
+  }
+  return cwd ? joinPath(cwd, raw) : raw
 }
 
 export function fileName(path: string): string {

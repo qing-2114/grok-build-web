@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { IconChevron, IconFolder, IconSearch } from '../icons'
 import {
+  friendlyFsError,
   listDir,
   rawFileUrl,
   readFilePreview,
@@ -10,6 +11,7 @@ import {
 import {
   dirName,
   fileName,
+  isAbsPath,
   isWebUrl,
   joinPath,
   looksLikeHtml,
@@ -107,6 +109,7 @@ export function FileExplorer() {
   const [preview, setPreview] = useState<FilePreview | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!sessionCwd) {
@@ -125,7 +128,7 @@ export function FileExplorer() {
       .catch((err: unknown) => {
         if (cancelled) return
         setRoot([])
-        setError(err instanceof Error ? err.message : '无法读取目录')
+        setError(friendlyFsError(err, '找不到工作目录'))
       })
     return () => {
       cancelled = true
@@ -135,20 +138,23 @@ export function FileExplorer() {
   useEffect(() => {
     if (!previewPath || !sessionCwd) {
       setPreview(null)
+      setPreviewError(null)
       return
     }
     let cancelled = false
     setLoading(true)
+    setPreviewError(null)
     void readFilePreview(sessionCwd, previewPath)
       .then((file) => {
         if (cancelled) return
         setPreview(file)
-        setError(null)
+        setPreviewError(null)
         setExpanded((prev) => {
           const next = new Set(prev)
           for (const p of file.ancestors) next.add(p)
           return next
         })
+        if (!samePath(file.path, previewPath)) setPreviewPath(file.path)
         void Promise.all(
           file.ancestors.map(async (dir) => {
             try {
@@ -170,7 +176,7 @@ export function FileExplorer() {
       .catch((err: unknown) => {
         if (cancelled) return
         setPreview(null)
-        notify(err instanceof Error ? err.message : '无法打开文件', 'error')
+        setPreviewError(friendlyFsError(err, '找不到该文件'))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -178,7 +184,7 @@ export function FileExplorer() {
     return () => {
       cancelled = true
     }
-  }, [previewPath, sessionCwd, notify])
+  }, [previewPath, sessionCwd])
 
   async function toggleDir(path: string) {
     setExpanded((prev) => {
@@ -192,7 +198,7 @@ export function FileExplorer() {
       const entries = await listDir(path)
       setChildrenMap((prev) => new Map(prev).set(path, entries))
     } catch (err) {
-      notify(err instanceof Error ? err.message : '无法读取文件夹', 'error')
+      notify(friendlyFsError(err, '无法读取文件夹'), 'error')
     }
   }
 
@@ -235,7 +241,7 @@ export function FileExplorer() {
           text={preview.text || ''}
           onOpenFile={(path) => {
             if (isWebUrl(path)) return
-            if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(path)) {
+            if (isAbsPath(path)) {
               setPreviewPath(path)
               return
             }
@@ -272,6 +278,13 @@ export function FileExplorer() {
     body = (
       <div className="files-empty">
         <p>{preview.message || '无法预览此文件'}</p>
+      </div>
+    )
+  } else if (previewError) {
+    body = (
+      <div className="files-empty">
+        <h2>无法打开</h2>
+        <p>{previewError}</p>
       </div>
     )
   } else {

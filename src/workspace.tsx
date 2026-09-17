@@ -29,7 +29,13 @@ import {
   type RemoteSession,
   type StreamEvent,
 } from './lib/agent'
-import { looksLikeHtml, isWebUrl, samePath } from './lib/paths'
+import {
+  looksLikeHtml,
+  isWebUrl,
+  samePath,
+  resolveOpenPath,
+  pathResolvesTo,
+} from './lib/paths'
 import {
   RIGHT_RAIL_WIDTH_DEFAULT,
   SIDEBAR_WIDTH_DEFAULT,
@@ -338,6 +344,19 @@ function openFileTab(state: WorkspaceState, path: string): WorkspaceState {
   }
   const active = state.rightTabs.find((t) => t.id === state.activeRightTabId)
   if (active?.kind === 'file' && !active.path) {
+    return {
+      ...state,
+      rightRailOpen: true,
+      rightTabs: state.rightTabs.map((t) =>
+        t.id === active.id ? { ...t, path } : t,
+      ),
+    }
+  }
+  if (
+    active?.kind === 'file' &&
+    active.path &&
+    pathResolvesTo(active.path, path)
+  ) {
     return {
       ...state,
       rightRailOpen: true,
@@ -1640,7 +1659,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const next = path.trim()
       if (!next) return
       if (isWebUrl(next)) return
-      dispatch({ type: 'open-file', path: next })
+      const snap = stateRef.current
+      const session = snap.sessions.find((s) => s.id === snap.activeSessionId)
+      const project = projectForSession(snap.projects, session ?? null)
+      const cwd = session?.cwd || project?.path || snap.homeDir || ''
+      const hints: string[] = []
+      for (const m of session?.messages ?? []) {
+        if (m.tool?.target) hints.push(m.tool.target)
+      }
+      dispatch({
+        type: 'open-file',
+        path: resolveOpenPath(next, cwd, hints),
+      })
     },
     openExternalUrl: (url) => {
       const target = url.trim()

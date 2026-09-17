@@ -10,12 +10,20 @@ export type ToolCall = {
   status: 'running' | 'success' | 'failed'
 }
 
+export type ChatImage = {
+  n: number
+  name: string
+  mime: string
+  src: string
+}
+
 export type Message = {
   id: string
   role: Role
   content: string
   createdAt: number
   tool?: ToolCall
+  images?: ChatImage[]
 }
 
 export type Project = {
@@ -54,6 +62,21 @@ export type QueuedPrompt = {
   id: string
   sessionId: string
   text: string
+}
+
+export type ContextUsage = {
+  sessionId: string
+  used: number
+  total: number
+  percent: number
+}
+
+export type RightPanel = 'idle' | 'review' | 'terminal' | 'files'
+
+export type RightTab = {
+  id: string
+  kind: 'review' | 'terminal' | 'file'
+  path: string | null
 }
 
 export const MODELS: {

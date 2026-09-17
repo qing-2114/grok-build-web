@@ -4,12 +4,14 @@ import {
   IconCopy,
   IconDown,
   IconMenu,
-  IconPrompt,
+  IconPanelRight,
   IconSidebar,
   IconSpark,
 } from '../icons'
+import { looksLikeFilePath } from '../lib/paths'
+import { stripImageTokens } from '../lib/images'
 import { displayTitle } from '../lib/title'
-import type { Message, ToolCall } from '../types'
+import type { ChatImage, Message, ToolCall } from '../types'
 import { useWorkspace } from '../workspace'
 import { Composer } from './Composer'
 import { RichText } from './RichText'
@@ -20,7 +22,13 @@ function toolStatusLabel(status: ToolCall['status'] | string | undefined): strin
   return '进行中'
 }
 
-function ChangeCard({ tools }: { tools: Message[] }) {
+function ChangeCard({
+  tools,
+  onOpenFile,
+}: {
+  tools: Message[]
+  onOpenFile: (path: string) => void
+}) {
   const [open, setOpen] = useState(false)
   const many = tools.length > 1
   const featured =
@@ -47,7 +55,17 @@ function ChangeCard({ tools }: { tools: Message[] }) {
           return (
             <li key={t.id}>
               <span className="change-name">{t.tool?.name}</span>
-              <span className="change-target">{t.tool?.target}</span>
+              {looksLikeFilePath(t.tool?.target ?? '') ? (
+                <button
+                  type="button"
+                  className="change-target is-link"
+                  onClick={() => onOpenFile(t.tool?.target ?? '')}
+                >
+                  {t.tool?.target}
+                </button>
+              ) : (
+                <span className="change-target">{t.tool?.target}</span>
+              )}
               <span className={`change-status is-${status}`}>
                 {toolStatusLabel(status)}
               </span>
@@ -93,9 +111,45 @@ function StatusPill() {
   )
 }
 
+function imagesBefore(messages: Message[], index: number): ChatImage[] {
+  for (let i = index; i >= 0; i--) {
+    const imgs = messages[i].images
+    if (messages[i].role === 'user' && imgs?.length) return imgs
+  }
+  return []
+}
+
+function UserPrompt({ message }: { message: Message }) {
+  const images = message.images ?? []
+  const text = images.length
+    ? stripImageTokens(message.content)
+    : message.content
+  return (
+    <div className={images.length ? 'follow-prompt has-images' : 'follow-prompt'}>
+      {images.length > 0 ? (
+        <div className="prompt-images">
+          {images.map((img) => (
+            <a
+              key={img.n}
+              className="prompt-image"
+              href={img.src}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <img src={img.src} alt="" />
+            </a>
+          ))}
+        </div>
+      ) : null}
+      {text ? <div className="follow-prompt-text">{text}</div> : null}
+    </div>
+  )
+}
+
 export function ChatPane() {
   const {
     activeProject,
+    composerProject,
     activeSession,
     isThinking,
     isHydrating,
@@ -106,10 +160,15 @@ export function ChatPane() {
     notify,
     connection,
     titleOverrides,
+    rightRailOpen,
+    toggleRightRail,
+    openLocalFile,
+    openExternalUrl,
   } = useWorkspace()
 
   const messages = activeSession?.messages ?? []
   const empty = messages.length === 0 && !isThinking && !isHydrating
+  const emptyProject = composerProject ?? activeProject
   const bottomRef = useRef<HTMLDivElement>(null)
   const threadRef = useRef<HTMLDivElement>(null)
   const prevSession = useRef<string | undefined>(undefined)
@@ -172,11 +231,7 @@ export function ChatPane() {
     while (i < messages.length) {
       const m = messages[i]
       if (m.role === 'user') {
-        nodes.push(
-          <div key={m.id} className="follow-prompt">
-            {m.content}
-          </div>,
-        )
+        nodes.push(<UserPrompt key={m.id} message={m} />)
         nodes.push(<hr key={`${m.id}-split`} className="turn-split" />)
         i += 1
         continue
@@ -187,12 +242,23 @@ export function ChatPane() {
           tools.push(messages[i])
           i += 1
         }
-        nodes.push(<ChangeCard key={tools[0].id} tools={tools} />)
+        nodes.push(
+          <ChangeCard
+            key={tools[0].id}
+            tools={tools}
+            onOpenFile={openLocalFile}
+          />,
+        )
         continue
       }
       nodes.push(
         <article key={m.id} className="doc-turn">
-          <RichText text={m.content} />
+          <RichText
+            text={m.content}
+            images={imagesBefore(messages, i)}
+            onOpenFile={openLocalFile}
+            onOpenUrl={openExternalUrl}
+          />
           {copyIds.has(m.id) ? (
             <div className="doc-actions">
               <button
@@ -234,16 +300,24 @@ export function ChatPane() {
               <IconSidebar />
             </button>
             <StatusPill />
+            <button
+              type="button"
+              className={rightRailOpen ? 'icon-btn is-active' : 'icon-btn'}
+              aria-label={rightRailOpen ? '收起右侧栏' : '打开右侧栏'}
+              onClick={toggleRightRail}
+            >
+              <IconPanelRight />
+            </button>
           </header>
           <div className="empty">
             <div className="empty-glyph">
-              <IconPrompt />
+              <img src="/grok-icon.png" alt="" />
             </div>
             <h1 className="empty-title">
-              {activeProject ? (
+              {emptyProject ? (
                 <>
                   你想让我们在{' '}
-                  <span className="project-name">{activeProject.name}</span>{' '}
+                  <span className="project-name">{emptyProject.name}</span>{' '}
                   中构建什么？
                 </>
               ) : (
@@ -293,6 +367,14 @@ export function ChatPane() {
             </div>
             <div className="doc-top-right">
               <StatusPill />
+              <button
+                type="button"
+                className={rightRailOpen ? 'icon-btn is-active' : 'icon-btn'}
+                aria-label={rightRailOpen ? '收起右侧栏' : '打开右侧栏'}
+                onClick={toggleRightRail}
+              >
+                <IconPanelRight />
+              </button>
             </div>
           </header>
 

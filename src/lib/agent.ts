@@ -54,6 +54,7 @@ export type StreamEvent =
     }
   | { type: 'done'; stopReason: string }
   | { type: 'error'; message: string }
+  | { type: 'usage'; used: number }
 
 export type PromptFile = {
   name: string
@@ -121,6 +122,38 @@ export async function createRemoteSession(input: {
     body: JSON.stringify(input),
   })
   return parseJson(res)
+}
+
+export async function fetchContextUsage(
+  id: string,
+  cwd: string,
+): Promise<{ used: number; total: number; percent: number }> {
+  const q = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
+  const res = await fetch(
+    `/api/sessions/${encodeURIComponent(id)}/context${q}`,
+  )
+  const data = await parseJson<{
+    used?: number
+    total?: number
+    percent?: number
+  }>(res)
+  return {
+    used: Number(data.used) || 0,
+    total: Number(data.total) || 0,
+    percent: Number(data.percent) || 0,
+  }
+}
+
+export async function fetchSessionTitle(
+  id: string,
+  cwd: string,
+): Promise<string> {
+  const q = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
+  const res = await fetch(
+    `/api/sessions/${encodeURIComponent(id)}/title${q}`,
+  )
+  const data = await parseJson<{ title?: string }>(res)
+  return String(data.title ?? '').trim()
 }
 
 export async function loadRemoteSession(

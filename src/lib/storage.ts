@@ -13,6 +13,9 @@ export type Persisted = {
   effort: EffortLevel
   profile: Profile
   titleOverrides?: Record<string, string>
+  terminalShellId?: string
+  sidebarWidth?: number
+  rightRailWidth?: number
 }
 
 export function loadState(): Persisted | null {

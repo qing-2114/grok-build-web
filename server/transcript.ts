@@ -23,6 +23,7 @@ export type StreamEvent =
   | { type: 'permission'; requestId: number; title: string; options: unknown }
   | { type: 'done'; stopReason: string }
   | { type: 'error'; message: string }
+  | { type: 'usage'; used: number }
 
 type AcpUpdate = {
   sessionUpdate?: string
@@ -33,7 +34,28 @@ type AcpUpdate = {
   status?: string
   rawInput?: Record<string, unknown>
   locations?: Array<{ path?: string }>
-  _meta?: { 'x.ai/tool'?: { name?: string; label?: string } }
+  _meta?: {
+    'x.ai/tool'?: { name?: string; label?: string }
+    totalTokens?: unknown
+  }
+}
+
+function asTokenCount(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.round(value)
+  }
+  return null
+}
+
+export function usageFromParams(params: {
+  update?: { _meta?: { totalTokens?: unknown } }
+  _meta?: { totalTokens?: unknown }
+}): StreamEvent | null {
+  const used =
+    asTokenCount(params.update?._meta?.totalTokens) ??
+    asTokenCount(params._meta?.totalTokens)
+  if (used == null) return null
+  return { type: 'usage', used }
 }
 
 function uid(): string {

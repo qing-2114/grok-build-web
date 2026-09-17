@@ -490,3 +490,96 @@ export function IconTrash(props: IconProps) {
     </Svg>
   )
 }
+
+export function IconDiff(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M4.2 2.6h5.2L12.8 6v7.4A1.4 1.4 0 0 1 11.4 14.8H4.2A1.4 1.4 0 0 1 2.8 13.4V4A1.4 1.4 0 0 1 4.2 2.6Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9.2 2.8V6h3.2"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5.4 9.2h5.2M5.4 11.6h3.4"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </Svg>
+  )
+}
+
+export function IconTerminal(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect
+        x="2"
+        y="3.2"
+        width="12"
+        height="9.6"
+        rx="1.6"
+        stroke="currentColor"
+        strokeWidth="1.4"
+      />
+      <path
+        d="M4.4 6.4 6.6 8.2 4.4 10M8.2 10.2h3.2"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  )
+}
+
+export function IconPanelRight(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect
+        x="2.2"
+        y="3"
+        width="11.6"
+        height="10"
+        rx="1.6"
+        stroke="currentColor"
+        strokeWidth="1.4"
+      />
+      <path d="M9.8 3v10" stroke="currentColor" strokeWidth="1.4" />
+    </Svg>
+  )
+}
+
+export function IconFileTree(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M3 3.4h4.2l1.1 1.3H13A1.1 1.1 0 0 1 14.1 5.8v6.6A1.1 1.1 0 0 1 13 13.5H3A1.1 1.1 0 0 1 1.9 12.4V4.5A1.1 1.1 0 0 1 3 3.4Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  )
+}
+
+export function IconSliders(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M3 5h10M3 11h10"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      <circle cx="6.2" cy="5" r="1.5" fill="currentColor" />
+      <circle cx="10.2" cy="11" r="1.5" fill="currentColor" />
+    </Svg>
+  )
+}

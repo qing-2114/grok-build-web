@@ -2,12 +2,34 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import type { GrokAcp } from './acp.ts'
-import { gitCheckout, gitInfo, normalizePath } from './git.ts'
-import { titleFromFirstPrompt } from './prompt-title.ts'
+import {
+  gitChanges,
+  gitCheckout,
+  gitFileDiff,
+  gitInfo,
+  normalizePath,
+} from './git.ts'
+import { listDir, readPreview, streamRaw } from './fs.ts'
+import {
+  closeTerminal,
+  detectShells,
+  interruptTerminal,
+  openExternal,
+  openLocalHtml,
+  startTerminal,
+  streamTerminal,
+  writeTerminal,
+} from './shells.ts'
+import { contextFromDisk } from './context.ts'
+import {
+  generatedTitleFromDisk,
+  titleFromFirstPrompt,
+} from './prompt-title.ts'
 import {
   permissionMeta,
   TranscriptBuilder,
   updateToEvent,
+  usageFromParams,
   type StreamEvent,
 } from './transcript.ts'
 
@@ -145,14 +167,22 @@ function buildPrompt(body: Record<string, unknown>): unknown[] {
         },
       })
     } else if (typeof rec.dataBase64 === 'string' && rec.dataBase64.length) {
-      blocks.push({
-        type: 'resource',
-        resource: {
-          uri: `file:///${name}`,
+      if (mime.startsWith('image/')) {
+        blocks.push({
+          type: 'image',
           mimeType: mime,
-          blob: rec.dataBase64,
-        },
-      })
+          data: rec.dataBase64,
+        })
+      } else {
+        blocks.push({
+          type: 'resource',
+          resource: {
+            uri: `file:///${name}`,
+            mimeType: mime,
+            blob: rec.dataBase64,
+          },
+        })
+      }
     } else {
       blocks.push({ type: 'text', text: `\n[附件] ${name}` })
     }
@@ -237,6 +267,101 @@ async function handle(
     return
   }
 
+  if (match(method, path, 'GET', '/api/git/changes')) {
+    const p = url.searchParams.get('path') || ''
+    sendJson(res, 200, await gitChanges(p))
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/git/diff')) {
+    const p = url.searchParams.get('path') || ''
+    const file = url.searchParams.get('file') || ''
+    sendJson(res, 200, await gitFileDiff(p, file))
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/fs/list')) {
+    const p = url.searchParams.get('path') || ''
+    sendJson(res, 200, { entries: await listDir(p) })
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/fs/file')) {
+    const cwd = url.searchParams.get('cwd') || homedir()
+    const file = url.searchParams.get('path') || ''
+    sendJson(res, 200, await readPreview(cwd, file))
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/fs/raw')) {
+    const cwd = url.searchParams.get('cwd') || homedir()
+    const file = url.searchParams.get('path') || ''
+    await streamRaw(cwd, file, req, res)
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/shells')) {
+    sendJson(res, 200, { shells: await detectShells() })
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/open-external')) {
+    const body = await readJson(req)
+    const target = String(body.url ?? body.path ?? '')
+    if (/\.html?$/i.test(target) && !/^https?:\/\//i.test(target)) {
+      openLocalHtml(target)
+    } else {
+      openExternal(target)
+    }
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/terminal')) {
+    const body = await readJson(req)
+    const created = await startTerminal(
+      String(body.cwd ?? ''),
+      String(body.shellId ?? 'powershell'),
+    )
+    sendJson(res, 200, created)
+    return
+  }
+
+  const termStream = match(method, path, 'GET', '/api/terminal/:id/stream')
+  if (termStream) {
+    await streamTerminal(termStream.id, req, res)
+    return
+  }
+
+  const termInput = match(method, path, 'POST', '/api/terminal/:id/input')
+  if (termInput) {
+    const body = await readJson(req)
+    writeTerminal(termInput.id, String(body.text ?? ''))
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
+  const termSig = match(method, path, 'POST', '/api/terminal/:id/signal')
+  if (termSig) {
+    interruptTerminal(termSig.id)
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
+  const termDel = match(method, path, 'DELETE', '/api/terminal/:id')
+  if (termDel) {
+    closeTerminal(termDel.id)
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
+  const contextGet = match(method, path, 'GET', '/api/sessions/:id/context')
+  if (contextGet) {
+    const cwd = normalizePath(url.searchParams.get('cwd') || '') || homedir()
+    sendJson(res, 200, await contextFromDisk(cwd, contextGet.id))
+    return
+  }
+
   await acp.ensure()
 
   if (match(method, path, 'GET', '/api/sessions')) {
@@ -244,14 +369,15 @@ async function handle(
     const sessions = await listSessions(acp, cwd)
     const listed = await Promise.all(
       sessions.map(async (s) => {
-        const fromPrompt = await titleFromFirstPrompt(
-          s.cwd || '',
-          s.sessionId,
-        )
+        const cwd = s.cwd || ''
+        const generated = await generatedTitleFromDisk(cwd, s.sessionId)
+        const fromPrompt = generated
+          ? ''
+          : await titleFromFirstPrompt(cwd, s.sessionId)
         return {
           id: s.sessionId,
-          title: fromPrompt || s.title || '会话',
-          cwd: s.cwd || '',
+          title: generated || s.title || fromPrompt || '会话',
+          cwd,
           updatedAt: toMillis(s.updatedAt),
         }
       }),
@@ -323,10 +449,11 @@ async function handle(
         cwd,
         mcpServers: [],
       })
+      const diskTitle = await generatedTitleFromDisk(cwd, sessionId)
       sendJson(res, 200, {
         sessionId,
         cwd: result._meta?.currentWorkingDirectory || cwd,
-        title: builder.title,
+        title: builder.title || diskTitle,
         messages: builder.messages,
         config: Object.fromEntries(
           (result.configOptions ?? []).map((o) => [o.id, o.currentValue]),
@@ -335,6 +462,14 @@ async function handle(
     } finally {
       acp.off('update', onUpdate)
     }
+    return
+  }
+
+  const titleGet = match(method, path, 'GET', '/api/sessions/:id/title')
+  if (titleGet) {
+    const cwd = normalizePath(url.searchParams.get('cwd') || '') || homedir()
+    const title = await generatedTitleFromDisk(cwd, titleGet.id)
+    sendJson(res, 200, { title })
     return
   }
 
@@ -351,12 +486,16 @@ async function handle(
     const write = (ev: StreamEvent) => {
       if (!res.writableEnded) res.write(JSON.stringify(ev) + '\n')
     }
-    const onUpdate = (params: { sessionId?: string; update?: unknown }) => {
+    const onUpdate = (params: { sessionId?: string; update?: unknown; _meta?: { totalTokens?: unknown } }) => {
       if (params.sessionId !== sessionId) return
       const ev = updateToEvent(
         (params.update ?? {}) as Parameters<typeof updateToEvent>[0],
       )
       if (ev) write(ev)
+      const usage = usageFromParams(
+        params as Parameters<typeof usageFromParams>[0],
+      )
+      if (usage) write(usage)
     }
     const onPerm = (reqPerm: {
       rpcId: number

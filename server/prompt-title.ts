@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { access } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -12,6 +12,32 @@ function titleFrom(text: string): string {
   const t = text.replace(/\s+/g, ' ').trim()
   if (!t) return ''
   return t.length > 28 ? `${t.slice(0, 28)}…` : t
+}
+
+export async function generatedTitleFromDisk(
+  cwd: string,
+  sessionId: string,
+): Promise<string> {
+  if (!cwd || !sessionId) return ''
+  const file = join(
+    grokHome(),
+    'sessions',
+    encodeURIComponent(cwd),
+    sessionId,
+    'summary.json',
+  )
+  try {
+    const raw = await readFile(file, 'utf8')
+    const data = JSON.parse(raw) as {
+      generated_title?: unknown
+      session_summary?: unknown
+    }
+    const title = String(data.generated_title ?? '').trim()
+    const summary = String(data.session_summary ?? '').trim()
+    return title || summary
+  } catch {
+    return ''
+  }
 }
 
 export async function titleFromFirstPrompt(

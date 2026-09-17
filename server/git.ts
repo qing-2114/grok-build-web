@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { platform } from 'node:os'
 import { resolve } from 'node:path'
 
 function runGit(cwd: string, args: string[]): Promise<{ code: number; out: string; err: string }> {
@@ -31,14 +32,18 @@ export function normalizePath(input: string): string {
   const trimmed = input.trim()
   if (!trimmed) return ''
   try {
-    return resolve(trimmed).replace(/\//g, '\\')
+    return resolve(trimmed)
   } catch {
     return trimmed
   }
 }
 
 export function samePath(a: string, b: string): boolean {
-  return normalizePath(a).toLowerCase() === normalizePath(b).toLowerCase()
+  const left = normalizePath(a)
+  const right = normalizePath(b)
+  return platform() === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right
 }
 
 export type GitInfo = {
@@ -171,7 +176,7 @@ export async function gitFileDiff(
       '--no-color',
       '--no-index',
       '--',
-      'NUL',
+      platform() === 'win32' ? 'NUL' : '/dev/null',
       rel,
     ])
     patch = neu.out

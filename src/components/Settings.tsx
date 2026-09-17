@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { IconCheck, IconChevron, IconSliders, IconUser } from '../icons'
+import { IconCheck, IconChevron, IconCpu, IconSliders, IconUser } from '../icons'
 import { fetchShells, type ShellInfo } from '../lib/fs'
 import { initials, readAvatarFile } from '../lib/profile'
 import { useWorkspace } from '../workspace'
+import { ModelDeploy } from './ModelDeploy'
 import { Popover } from './Popover'
 
-type SettingsPage = 'general' | 'profile'
+type SettingsPage = 'general' | 'deploy' | 'profile'
 
 export function Settings() {
   const {
@@ -93,6 +94,18 @@ export function Settings() {
           <button
             type="button"
             className={
+              page === 'deploy'
+                ? 'settings-nav-item is-active'
+                : 'settings-nav-item'
+            }
+            onClick={() => setPage('deploy')}
+          >
+            <IconCpu />
+            模型部署
+          </button>
+          <button
+            type="button"
+            className={
               page === 'profile'
                 ? 'settings-nav-item is-active'
                 : 'settings-nav-item'
@@ -104,7 +117,7 @@ export function Settings() {
           </button>
         </nav>
 
-        <div className="settings-main">
+        <div className={page === 'deploy' ? 'settings-main is-deploy' : 'settings-main'}>
           {page === 'general' ? (
             <section className="settings-card">
               <h2>通用</h2>
@@ -160,6 +173,8 @@ export function Settings() {
                 </Popover>
               </div>
             </section>
+          ) : page === 'deploy' ? (
+            <ModelDeploy />
           ) : (
             <section className="settings-card">
               <h2>个人资料</h2>

@@ -92,6 +92,12 @@ export class GrokAcp extends EventEmitter {
     if (!this.connected) await this.start()
   }
 
+  async restart(): Promise<void> {
+    if (this.starting) await this.starting.catch(() => undefined)
+    this.stop()
+    await this.start()
+  }
+
   request<T = unknown>(
     method: string,
     params: Record<string, unknown> = {},

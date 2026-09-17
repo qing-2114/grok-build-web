@@ -583,3 +583,72 @@ export function IconSliders(props: IconProps) {
     </Svg>
   )
 }
+
+export function IconCpu(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect
+        x="4.2"
+        y="4.2"
+        width="7.6"
+        height="7.6"
+        rx="1.2"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+      <path
+        d="M8 2.4v1.8M8 11.8v1.8M2.4 8h1.8M11.8 8h1.8M4.7 3.3l.7 1.2M10.6 11.5l.7 1.2M3.3 11.3l1.2-.7M11.5 5.4l1.2-.7"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </Svg>
+  )
+}
+
+export function IconBox(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M8 2.6 13.2 5.2v5.6L8 13.4 2.8 10.8V5.2L8 2.6Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8 13.4V8M2.8 5.2 8 8l5.2-2.8"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  )
+}
+
+export function IconEye(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M2.4 8s2.2-4 5.6-4 5.6 4 5.6 4-2.2 4-5.6 4-5.6-4-5.6-4Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="8" r="1.6" stroke="currentColor" strokeWidth="1.3" />
+    </Svg>
+  )
+}
+
+export function IconEyeOff(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M3.2 3.2 12.8 12.8M6.1 6.3A3.2 3.2 0 0 0 8 12c1.8 0 3.2-.9 4.3-2M12.7 8.7C13.4 8.2 13.6 8 13.6 8s-2.2-4-5.6-4c-.5 0-1 .1-1.4.2"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  )
+}

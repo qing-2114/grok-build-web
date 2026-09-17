@@ -22,6 +22,15 @@ import {
 } from './shells.ts'
 import { contextFromDisk } from './context.ts'
 import {
+  deleteProvider,
+  fetchCatalog,
+  listProviders,
+  parseProviderBody,
+  probeEndpoint,
+  saveProvider,
+  type ApiBackend,
+} from './deploy.ts'
+import {
   generatedTitleFromDisk,
   titleFromFirstPrompt,
 } from './prompt-title.ts'
@@ -302,6 +311,103 @@ async function handle(
 
   if (match(method, path, 'GET', '/api/shells')) {
     sendJson(res, 200, { shells: await detectShells() })
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/deployments')) {
+    sendJson(res, 200, { providers: await listProviders() })
+    return
+  }
+
+  if (match(method, path, 'PUT', '/api/deployments')) {
+    const body = await readJson(req)
+    let provider
+    try {
+      provider = parseProviderBody(body)
+    } catch (err) {
+      sendJson(res, 400, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
+    const providers = await saveProvider(provider)
+    let connected = acp.connected
+    let error: string | null = null
+    try {
+      await acp.restart()
+      connected = acp.connected
+    } catch (err) {
+      connected = false
+      error = err instanceof Error ? err.message : String(err)
+    }
+    sendJson(res, 200, {
+      ok: true,
+      providers,
+      connected,
+      error,
+      models: acp.models,
+      currentModelId: acp.currentModelId,
+    })
+    return
+  }
+
+  const deployDel = match(method, path, 'DELETE', '/api/deployments/:id')
+  if (deployDel) {
+    const providers = await deleteProvider(deployDel.id)
+    let connected = acp.connected
+    let error: string | null = null
+    try {
+      await acp.restart()
+      connected = acp.connected
+    } catch (err) {
+      connected = false
+      error = err instanceof Error ? err.message : String(err)
+    }
+    sendJson(res, 200, {
+      ok: true,
+      providers,
+      connected,
+      error,
+      models: acp.models,
+      currentModelId: acp.currentModelId,
+    })
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/deployments/test')) {
+    const body = await readJson(req)
+    try {
+      const result = await probeEndpoint({
+        baseUrl: String(body.baseUrl ?? ''),
+        apiKey: String(body.apiKey ?? ''),
+        apiBackend: String(body.apiBackend ?? 'chat_completions') as ApiBackend,
+        model: typeof body.model === 'string' ? body.model : '',
+      })
+      sendJson(res, 200, result)
+    } catch (err) {
+      sendJson(res, 200, {
+        ok: false,
+        latencyMs: 0,
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/deployments/catalog')) {
+    const body = await readJson(req)
+    try {
+      const models = await fetchCatalog({
+        baseUrl: String(body.baseUrl ?? ''),
+        apiKey: String(body.apiKey ?? ''),
+        apiBackend: String(body.apiBackend ?? 'chat_completions') as ApiBackend,
+      })
+      sendJson(res, 200, { models })
+    } catch (err) {
+      sendJson(res, 400, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
     return
   }
 

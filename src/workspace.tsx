@@ -1033,6 +1033,7 @@ type WorkspaceApi = WorkspaceState & {
   setProjectDialog: (open: boolean, editId?: string | null) => void
   setSettingsOpen: (open: boolean) => void
   setProfile: (profile: Profile) => void
+  refreshAgent: () => Promise<void>
   notify: (message: string, kind?: 'info' | 'success' | 'error') => void
   resolvePermission: (optionId: string | null) => void
   sessionCwd: string
@@ -1649,6 +1650,39 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'set-project-dialog', open, editId }),
     setSettingsOpen: (open) => dispatch({ type: 'set-settings', open }),
     setProfile: (profile) => dispatch({ type: 'set-profile', profile }),
+    refreshAgent: async () => {
+      try {
+        const status = await fetchStatus()
+        if (!status.connected) {
+          dispatch({
+            type: 'set-connection',
+            connection: 'error',
+            error: status.error || '本机 Grok Build 未连接',
+            version: status.version,
+            home: status.home,
+          })
+        } else {
+          dispatch({
+            type: 'set-connection',
+            connection: 'connected',
+            error: null,
+            version: status.version,
+            home: status.home,
+          })
+        }
+        dispatch({
+          type: 'set-agent-models',
+          models: status.models,
+          currentModelId: status.currentModelId,
+        })
+      } catch (err) {
+        dispatch({
+          type: 'set-connection',
+          connection: 'error',
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    },
     notify,
     sessionCwd,
     toggleRightRail: () => dispatch({ type: 'toggle-right-rail' }),

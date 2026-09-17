@@ -56,7 +56,8 @@ export function Popover({
       const mw = menu.offsetWidth
       const mh = menu.offsetHeight
       const pad = 10
-      let left = r.right - mw
+      let left =
+        align === 'down-right' || align === 'right' ? r.right - mw : r.left
       let top = r.bottom + 6
       if (left < pad) left = pad
       if (left + mw > window.innerWidth - pad) {
@@ -76,7 +77,7 @@ export function Popover({
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [open, portal])
+  }, [open, portal, align])
 
   const menu = open ? (
     <div

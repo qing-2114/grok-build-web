@@ -2,8 +2,11 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
+  type DragEvent,
   type KeyboardEvent,
 } from 'react'
 import {
@@ -19,15 +22,91 @@ import {
   IconShield,
   IconStop,
 } from '../icons'
+import {
+  filesFromClipboard,
+  filesFromDrop,
+  hasFilePayload,
+  isImageFile,
+  partitionAttach,
+} from '../lib/attach'
+import {
+  acceptSlashPick,
+  flattenSlash,
+  menuGroupsForPhase,
+  resolveSlash,
+  slashMenuPhase,
+  type SlashCommand,
+  type SlashContext,
+  type SlashOutcome,
+} from '../lib/slash'
 import { uid } from '../lib/uid'
 import { EFFORTS, MODELS, PERMISSION_MODES } from '../types'
+import type { ContextUsage } from '../types'
 import { useWorkspace } from '../workspace'
 import { Popover } from './Popover'
+import { SlashMenu } from './SlashMenu'
 
 type Attachment = {
   id: string
   file: File
   preview: string | null
+}
+
+function formatMarks(n: number): string {
+  if (n < 1000) return String(Math.max(0, Math.round(n)))
+  if (n < 10_000) {
+    const k = n / 1000
+    const t = k.toFixed(1)
+    return `${t.endsWith('.0') ? t.slice(0, -2) : t}k`
+  }
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`
+  const m = n / 1_000_000
+  const t = m >= 10 ? String(Math.round(m)) : m.toFixed(1)
+  return `${t.endsWith('.0') ? t.slice(0, -2) : t}m`
+}
+
+function ContextRing({ usage }: { usage: ContextUsage | null }) {
+  const used = usage?.used ?? 0
+  const total = usage?.total ?? 0
+  const percent = Math.min(100, Math.max(0, usage?.percent ?? 0))
+  const r = 6.25
+  const c = 2 * Math.PI * r
+  const dash = (percent / 100) * c
+  const tone =
+    percent >= 95 ? 'is-danger' : percent >= 80 ? 'is-warn' : ''
+  const detail =
+    total > 0
+      ? `已用 ${formatMarks(used)} 标记，共 ${formatMarks(total)}`
+      : used > 0
+        ? `已用 ${formatMarks(used)} 标记`
+        : '尚无占用数据'
+  const label = `上下文窗口 ${percent}% 已用`
+
+  return (
+    <span
+      className={tone ? `ctx-ring ${tone}` : 'ctx-ring'}
+      tabIndex={0}
+      aria-label={label}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <circle className="ctx-ring-track" cx="8" cy="8" r={r} />
+        {percent > 0.4 ? (
+          <circle
+            className="ctx-ring-fill"
+            cx="8"
+            cy="8"
+            r={r}
+            strokeDasharray={`${dash} ${c}`}
+          />
+        ) : null}
+      </svg>
+      <span className="ctx-tip" role="tooltip" aria-hidden="true">
+        <span className="ctx-tip-kicker">上下文窗口</span>
+        <span className="ctx-tip-pct">{percent}% 已用</span>
+        <span className="ctx-tip-detail">{detail}</span>
+      </span>
+    </span>
+  )
 }
 
 function extOf(name: string): string {
@@ -136,7 +215,7 @@ function extTone(ext: string): string {
 
 export function Composer() {
   const {
-    activeProject,
+    composerProject,
     projects,
     permissionMode,
     model,
@@ -150,20 +229,69 @@ export function Composer() {
     outgoingQueue,
     activeSession,
     setMode,
+    setModel,
+    setEffort,
     setWorkspaceProject,
     setBranch,
     setProjectDialog,
+    setSettingsOpen,
+    newChat,
+    deleteSession,
+    renameSession,
+    notify,
     models,
+    contextUsage,
   } = useWorkspace()
 
   const [draft, setDraft] = useState('')
   const [projectQuery, setProjectQuery] = useState('')
   const [files, setFiles] = useState<Attachment[]>([])
+  const [dragging, setDragging] = useState(false)
+  const [slashNav, setSlashNav] = useState({ key: '', index: 0 })
+  const [slashDismissed, setSlashDismissed] = useState<string | null>(null)
   const areaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const filesRef = useRef(files)
   filesRef.current = files
   const formId = useId()
+
+  const menuPhase = useMemo(() => slashMenuPhase(draft), [draft])
+  const slashGroups = useMemo(
+    () => (menuPhase ? menuGroupsForPhase(menuPhase, { model, models }) : []),
+    [menuPhase, model, models],
+  )
+  const slashFlat = useMemo(() => flattenSlash(slashGroups), [slashGroups])
+  const menuKey = menuPhase?.key ?? ''
+  const slashIndex = (() => {
+    if (slashNav.key === menuKey) return slashNav.index
+    if (menuPhase?.phase !== 'args') return 0
+    const current =
+      menuPhase.cmd.complete === 'models'
+        ? model
+        : menuPhase.cmd.complete === 'efforts'
+          ? effort
+          : null
+    if (!current) return 0
+    const i = slashFlat.findIndex((c) => c.name === current)
+    return i >= 0 ? i : 0
+  })()
+  const slashOpen = menuPhase !== null && slashDismissed !== menuPhase.key
+  const activeSlash =
+    slashFlat[
+      slashFlat.length
+        ? Math.min(slashIndex, slashFlat.length - 1)
+        : 0
+    ] ?? null
+
+  function setSlashIndex(index: number) {
+    setSlashNav({ key: menuKey, index })
+  }
+
+  useEffect(() => {
+    if (!slashOpen || !activeSlash) return
+    const el = document.getElementById(`slash-${activeSlash.id}`)
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [slashOpen, activeSlash])
 
   useEffect(() => {
     const el = areaRef.current
@@ -180,6 +308,51 @@ export function Composer() {
     }
   }, [])
 
+  useEffect(() => {
+    const over = (e: globalThis.DragEvent) => {
+      if (hasFilePayload(e.dataTransfer)) e.preventDefault()
+    }
+    const drop = (e: globalThis.DragEvent) => {
+      if (hasFilePayload(e.dataTransfer)) e.preventDefault()
+    }
+    window.addEventListener('dragover', over)
+    window.addEventListener('drop', drop)
+    return () => {
+      window.removeEventListener('dragover', over)
+      window.removeEventListener('drop', drop)
+    }
+  }, [])
+
+  const slashCtx: SlashContext = {
+    activeProjectId: composerProject?.id ?? null,
+    activeSession,
+    permissionMode,
+    model,
+    models,
+    newChat,
+    setMode,
+    setModel,
+    setEffort,
+    setSettingsOpen,
+    deleteSession,
+    renameSession,
+    notify,
+    copyLastReply() {
+      const messages = activeSession?.messages ?? []
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i]
+        if (m.role === 'assistant' && !m.tool && m.content.trim()) {
+          void navigator.clipboard.writeText(m.content).then(
+            () => notify('已复制', 'success'),
+            () => notify('复制失败', 'error'),
+          )
+          return true
+        }
+      }
+      return false
+    },
+  }
+
   function pickFiles(accept: string) {
     const el = fileRef.current
     if (!el) return
@@ -188,20 +361,35 @@ export function Composer() {
     el.click()
   }
 
-  function onFilesPicked(list: FileList | null) {
-    if (!list?.length) return
-    const next: Attachment[] = []
-    for (const file of Array.from(list)) {
-      const dup = files.some((f) => f.file.name === file.name && f.file.size === file.size)
-      if (dup) continue
-      const image = file.type.startsWith('image/')
-      next.push({
-        id: uid('file'),
-        file,
-        preview: image ? URL.createObjectURL(file) : null,
-      })
+  function addFiles(list: File[]) {
+    if (!list.length) return
+    const { ok, oversized } = partitionAttach(list)
+    if (oversized) {
+      notify(
+        oversized === 1
+          ? '有 1 个文件超过 10 MB，未添加'
+          : `有 ${oversized} 个文件超过 10 MB，未添加`,
+        'error',
+      )
     }
-    if (next.length) setFiles((prev) => [...prev, ...next])
+    if (!ok.length) return
+    setFiles((prev) => {
+      const next: Attachment[] = []
+      for (const file of ok) {
+        const dup = prev.some(
+          (f) => f.file.name === file.name && f.file.size === file.size,
+        ) || next.some(
+          (f) => f.file.name === file.name && f.file.size === file.size,
+        )
+        if (dup) continue
+        next.push({
+          id: uid('file'),
+          file,
+          preview: isImageFile(file) ? URL.createObjectURL(file) : null,
+        })
+      }
+      return next.length ? [...prev, ...next] : prev
+    })
   }
 
   function removeFile(id: string) {
@@ -218,35 +406,137 @@ export function Composer() {
       if (f.preview) URL.revokeObjectURL(f.preview)
     })
     setFiles([])
+    setSlashDismissed(null)
     requestAnimationFrame(() => areaRef.current?.focus())
   }
 
+  function applySlash(out: SlashOutcome, attach: File[]) {
+    if (out.kind === 'none') return false
+    if (out.kind === 'insert') {
+      setDraft(out.text)
+      setSlashDismissed(null)
+      requestAnimationFrame(() => {
+        const el = areaRef.current
+        if (!el) return
+        el.focus()
+        const n = out.text.length
+        el.setSelectionRange(n, n)
+      })
+      return true
+    }
+    if (out.kind === 'handled') {
+      clearDraft()
+      return true
+    }
+    if (isThinking) {
+      enqueue(out.text)
+      clearDraft()
+      return true
+    }
+    send(out.text, attach)
+    clearDraft()
+    return true
+  }
+
+  function acceptSlash(cmd: SlashCommand) {
+    if (!menuPhase) return
+    applySlash(acceptSlashPick(cmd, menuPhase, slashCtx), files.map((f) => f.file))
+  }
+
   function submit() {
+    if (slashOpen && activeSlash) {
+      acceptSlash(activeSlash)
+      return
+    }
     const names = files.map((f) => f.file.name)
+    const attach = files.map((f) => f.file)
     const text = draft.trim()
+    const slashOut = text.startsWith('/') ? resolveSlash(text, slashCtx) : { kind: 'none' as const }
+    if (slashOut.kind !== 'none') {
+      applySlash(slashOut, attach)
+      return
+    }
+    const onlyImages = attach.length > 0 && attach.every(isImageFile)
     const payload =
-      text || (names.length ? `请查看附件：${names.join('、')}` : '')
-    if (!payload) {
+      text || (names.length && !onlyImages ? `请查看附件：${names.join('、')}` : '')
+    if (!payload && !attach.length) {
       if (isThinking) stopGeneration()
       return
     }
     if (isThinking) {
+      if (!payload) return
       enqueue(payload)
       clearDraft()
       return
     }
-    send(
-      payload,
-      files.map((f) => f.file),
-    )
+    send(payload, attach)
     clearDraft()
   }
 
   function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.nativeEvent.isComposing || e.key === 'Process') return
+    if (slashOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        if (!slashFlat.length) return
+        setSlashIndex((slashIndex + 1) % slashFlat.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (!slashFlat.length) return
+        setSlashIndex((slashIndex - 1 + slashFlat.length) % slashFlat.length)
+        return
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        if (activeSlash) acceptSlash(activeSlash)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashDismissed(menuPhase?.key ?? null)
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submit()
     }
+  }
+
+  function onPaste(e: ClipboardEvent<HTMLDivElement>) {
+    const incoming = filesFromClipboard(e.clipboardData)
+    if (!incoming.length) return
+    addFiles(incoming)
+    const text = e.clipboardData?.getData('text/plain') ?? ''
+    if (!text.trim()) e.preventDefault()
+  }
+
+  function onDragEnter(e: DragEvent<HTMLDivElement>) {
+    if (!hasFilePayload(e.dataTransfer)) return
+    e.preventDefault()
+    setDragging(true)
+  }
+
+  function onDragOver(e: DragEvent<HTMLDivElement>) {
+    if (!hasFilePayload(e.dataTransfer)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  function onDragLeave(e: DragEvent<HTMLDivElement>) {
+    const next = e.relatedTarget as Node | null
+    if (next && e.currentTarget.contains(next)) return
+    setDragging(false)
+  }
+
+  function onDrop(e: DragEvent<HTMLDivElement>) {
+    if (!hasFilePayload(e.dataTransfer)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setDragging(false)
+    addFiles(filesFromDrop(e.dataTransfer))
   }
 
   const modeMeta =
@@ -266,9 +556,9 @@ export function Composer() {
           p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q),
       )
     : projects
-  const branches = activeProject?.branches ?? []
+  const branches = composerProject?.branches ?? []
   const showBranch =
-    Boolean(activeProject?.branch) && branches.length > 0
+    Boolean(composerProject?.branch) && branches.length > 0
 
   return (
     <div className="composer">
@@ -307,14 +597,47 @@ export function Composer() {
           ))}
         </div>
       ) : null}
-      <div className="composer-box">
+      <div className="composer-stack">
+        {slashOpen ? (
+          <SlashMenu
+            groups={slashGroups}
+            activeId={activeSlash?.id ?? null}
+            heads={menuPhase?.phase === 'args' || slashGroups.length > 1}
+            empty={
+              menuPhase?.phase === 'args' && menuPhase.cmd.complete === 'models'
+                ? 'No matching models'
+                : menuPhase?.phase === 'args' &&
+                    menuPhase.cmd.complete === 'efforts'
+                  ? 'No matching effort levels'
+                  : 'No matching commands'
+            }
+            onHover={(id) => {
+              const i = slashFlat.findIndex((c) => c.id === id)
+              if (i >= 0) setSlashIndex(i)
+            }}
+            onPick={acceptSlash}
+          />
+        ) : null}
+        <div
+          className={dragging ? 'composer-box is-drop' : 'composer-box'}
+          onDragEnter={onDragEnter}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+          onPaste={onPaste}
+        >
+          {dragging ? (
+            <div className="composer-drop" aria-hidden="true">
+              松开以添加文件
+            </div>
+          ) : null}
         <div className="composer-meta">
           <Popover
             align="up-left"
             menuClassName="chip-menu project-menu"
             trigger={({ open, toggle }) => (
               <div className={open ? 'chip is-open' : 'chip'}>
-                {activeProject ? (
+                {composerProject ? (
                   <button
                     type="button"
                     className="chip-lead"
@@ -335,8 +658,8 @@ export function Composer() {
                   onClick={toggle}
                   aria-expanded={open}
                 >
-                  {activeProject ? null : <IconFolder />}
-                  <span>{activeProject?.name ?? '选择项目'}</span>
+                  {composerProject ? null : <IconFolder />}
+                  <span>{composerProject?.name ?? '选择项目'}</span>
                   <IconChevron />
                 </button>
               </div>
@@ -361,7 +684,7 @@ export function Composer() {
                       type="button"
                       role="menuitem"
                       className={
-                        p.id === activeProject?.id
+                        p.id === composerProject?.id
                           ? 'project-row is-active'
                           : 'project-row'
                       }
@@ -373,7 +696,7 @@ export function Composer() {
                     >
                       <IconFolder />
                       <span>{p.name}</span>
-                      {p.id === activeProject?.id ? (
+                      {p.id === composerProject?.id ? (
                         <IconCheck className="row-check" />
                       ) : null}
                     </button>
@@ -414,7 +737,7 @@ export function Composer() {
             )}
           </Popover>
 
-          {showBranch && activeProject ? (
+          {showBranch && composerProject ? (
             <Popover
               align="up-left"
               menuClassName="chip-menu branch-menu"
@@ -424,10 +747,10 @@ export function Composer() {
                   className="chip"
                   onClick={toggle}
                   aria-expanded={open}
-                  title={`${activeProject.path} · ${activeProject.branch}`}
+                  title={`${composerProject.path} · ${composerProject.branch}`}
                 >
                   <IconGitBranch />
-                  <span>{activeProject.branch}</span>
+                  <span>{composerProject.branch}</span>
                   <IconChevron />
                 </button>
               )}
@@ -441,12 +764,12 @@ export function Composer() {
                       type="button"
                       role="menuitem"
                       className={
-                        b === activeProject.branch
+                        b === composerProject.branch
                           ? 'project-row is-active'
                           : 'project-row'
                       }
                       onClick={() => {
-                        if (b !== activeProject.branch) {
+                        if (b !== composerProject.branch) {
                           setBranch(b)
                         }
                         close()
@@ -454,7 +777,7 @@ export function Composer() {
                     >
                       <IconGitBranch />
                       <span>{b}</span>
-                      {b === activeProject.branch ? (
+                      {b === composerProject.branch ? (
                         <IconCheck className="row-check" />
                       ) : null}
                     </button>
@@ -504,7 +827,7 @@ export function Composer() {
           type="file"
           multiple
           onChange={(e) => {
-            onFilesPicked(e.target.files)
+            addFiles(Array.from(e.target.files ?? []))
             e.target.value = ''
           }}
         />
@@ -518,8 +841,18 @@ export function Composer() {
           rows={1}
           value={draft}
           placeholder="随心输入"
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            setSlashDismissed(null)
+          }}
           onKeyDown={onKey}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={slashOpen}
+          aria-controls="slash-menu"
+          aria-activedescendant={
+            slashOpen && activeSlash ? `slash-${activeSlash.id}` : undefined
+          }
         />
         <div className="composer-bar">
           <div className="bar-left">
@@ -602,25 +935,28 @@ export function Composer() {
           </div>
 
           <div className="bar-right">
-            <Popover
-              menuClassName="model-menu"
-              trigger={({ open, toggle }) => (
-                <button
-                  type="button"
-                  className="model-chip"
-                  onClick={toggle}
-                  aria-expanded={open}
-                >
-                  {modelMeta.label}
-                  <span className="effort-tag">{effortMeta.label}</span>
-                  <IconChevron />
-                </button>
-              )}
-            >
-              {({ close }) => (
-                <ModelMenu close={close} />
-              )}
-            </Popover>
+            <div className="model-cluster">
+              <ContextRing usage={contextUsage} />
+              <Popover
+                menuClassName="model-menu"
+                trigger={({ open, toggle }) => (
+                  <button
+                    type="button"
+                    className="model-chip"
+                    onClick={toggle}
+                    aria-expanded={open}
+                  >
+                    {modelMeta.label}
+                    <span className="effort-tag">{effortMeta.label}</span>
+                    <IconChevron />
+                  </button>
+                )}
+              >
+                {({ close }) => (
+                  <ModelMenu close={close} />
+                )}
+              </Popover>
+            </div>
             <button
               type="button"
               className={showStop ? 'send-btn is-stop' : 'send-btn'}
@@ -631,6 +967,7 @@ export function Composer() {
               {showStop ? <IconStop /> : <IconSend />}
             </button>
           </div>
+        </div>
         </div>
       </div>
     </div>

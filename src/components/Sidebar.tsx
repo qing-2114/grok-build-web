@@ -9,11 +9,13 @@ import {
   IconSearch,
   IconTrash,
 } from '../icons'
+import { SIDEBAR_WIDTH_DEFAULT } from '../lib/layout'
 import { relativeTime } from '../lib/time'
 import { displayTitle } from '../lib/title'
 import type { Project, Session } from '../types'
 import { useWorkspace } from '../workspace'
 import { Popover } from './Popover'
+import { ResizeHandle } from './ResizeHandle'
 import { UserMenu } from './UserMenu'
 
 function SessionRow({
@@ -101,6 +103,7 @@ export function Sidebar() {
     expandedProjectId,
     search,
     sidebarCollapsed,
+    sidebarWidth,
     mobileNavOpen,
     setSearch,
     newChat,
@@ -111,6 +114,7 @@ export function Sidebar() {
     renameSession,
     setProjectDialog,
     toggleSidebar,
+    setSidebarWidth,
     setMobileNav,
     titleOverrides,
   } = useWorkspace()
@@ -214,7 +218,7 @@ export function Sidebar() {
         <button
           type="button"
           className="nav-item"
-          onClick={() => newChat()}
+          onClick={() => newChat(null)}
           title="新建对话"
         >
           <IconNewChat />
@@ -306,7 +310,7 @@ export function Sidebar() {
                               }}
                             >
                               <IconPencil />
-                              编辑项目
+                              <span>编辑项目</span>
                             </button>
                             <button
                               type="button"
@@ -318,7 +322,7 @@ export function Sidebar() {
                               }}
                             >
                               <IconTrash />
-                              删除所有聊天
+                              <span>删除所有聊天</span>
                             </button>
                           </>
                         )}
@@ -419,6 +423,14 @@ export function Sidebar() {
       <footer className="sidebar-foot">
         <UserMenu />
       </footer>
+      {!collapsed ? (
+        <ResizeHandle
+          label="调整左侧栏宽度"
+          value={sidebarWidth}
+          fallback={SIDEBAR_WIDTH_DEFAULT}
+          onChange={setSidebarWidth}
+        />
+      ) : null}
     </aside>
   )
 }

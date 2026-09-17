@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 .verify/
+.tmp/
+.tmp-verify/
+.tmp-preview/
 AGENTS.md
 handoff.md
 

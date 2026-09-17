@@ -15,8 +15,10 @@ import {
   checkoutGit,
   createRemoteSession,
   deleteRemoteSession,
+  fetchContextUsage,
   fetchGit,
   fetchSessions,
+  fetchSessionTitle,
   fetchStatus,
   filesToPrompt,
   isGrokSessionId,
@@ -27,12 +29,28 @@ import {
   type RemoteSession,
   type StreamEvent,
 } from './lib/agent'
+import { looksLikeHtml, isWebUrl, samePath } from './lib/paths'
+import {
+  RIGHT_RAIL_WIDTH_DEFAULT,
+  SIDEBAR_WIDTH_DEFAULT,
+  storedWidth,
+} from './lib/layout'
 import { loadState, saveState } from './lib/storage'
-import { firstPromptTitle, titleFrom } from './lib/title'
+import {
+  displayTitle,
+  firstPromptTitle,
+  isPlaceholderTitle,
+  titleFrom,
+} from './lib/title'
 import { uid } from './lib/uid'
+import { filesToChatImages, isImageFile } from './lib/images'
+import { openExternal } from './lib/fs'
+
 import { MODELS } from './types'
 import type {
+  ChatImage,
   ConnectionStatus,
+  ContextUsage,
   EffortLevel,
   Message,
   PermissionMode,
@@ -40,6 +58,8 @@ import type {
   Profile,
   Project,
   QueuedPrompt,
+  RightPanel,
+  RightTab,
   Session,
 } from './types'
 
@@ -72,6 +92,13 @@ export type WorkspaceState = {
   permissionRequest: PermissionRequest | null
   titleOverrides: Record<string, string>
   outgoingQueue: QueuedPrompt[]
+  contextUsage: ContextUsage | null
+  rightRailOpen: boolean
+  rightTabs: RightTab[]
+  activeRightTabId: string | null
+  terminalShellId: string
+  sidebarWidth: number
+  rightRailWidth: number
 }
 
 type Action =
@@ -81,9 +108,16 @@ type Action =
   | { type: 'add-project'; project: Project }
   | { type: 'delete-session'; id: string }
   | { type: 'rename-session'; id: string; title: string }
-  | { type: 'send'; text: string }
-  | { type: 'adopt-session'; localId: string | null; session: Session; text: string }
+  | { type: 'send'; text: string; images?: ChatImage[] }
+  | {
+      type: 'bind-remote'
+      localId: string
+      sessionId: string
+      cwd: string
+      projectId: string | null
+    }
   | { type: 'hydrate-session'; sessionId: string; messages: Message[]; title?: string }
+  | { type: 'set-session-title'; id: string; title: string }
   | { type: 'merge-remote'; sessions: RemoteSession[] }
   | { type: 'stream'; sessionId: string; event: StreamEvent }
   | { type: 'thinking'; sessionId: string; on: boolean }
@@ -103,12 +137,26 @@ type Action =
   | { type: 'update-project'; id: string; name: string; path: string }
   | { type: 'delete-project-chats'; id: string }
   | { type: 'set-branch'; branch: string }
+  | { type: 'set-context-usage'; usage: ContextUsage | null }
+  | { type: 'patch-context-used'; sessionId: string; used: number }
   | { type: 'set-settings'; open: boolean }
   | { type: 'set-profile'; profile: Profile }
   | { type: 'toast'; toast: WorkspaceState['toast'] }
   | { type: 'enqueue'; item: QueuedPrompt }
   | { type: 'dequeue'; id: string }
   | { type: 'remap-queue'; from: string; to: string }
+  | { type: 'toggle-right-rail' }
+  | { type: 'open-right-panel'; panel: RightPanel }
+  | { type: 'set-right-panel'; panel: RightPanel }
+  | { type: 'set-right-rail'; open: boolean }
+  | { type: 'open-file'; path: string }
+  | { type: 'set-preview-path'; path: string | null }
+  | { type: 'select-right-tab'; id: string }
+  | { type: 'close-right-tab'; id: string }
+  | { type: 'add-right-tab' }
+  | { type: 'set-terminal-shell'; id: string }
+  | { type: 'set-sidebar-width'; width: number }
+  | { type: 'set-right-rail-width'; width: number }
 
 function visibleSessions(sessions: Session[]): Session[] {
   return sessions
@@ -150,12 +198,26 @@ function clampEffort(modelId: string, effort: EffortLevel, models: AgentModel[])
   return model.efforts.includes('high') ? 'high' : model.efforts[0]
 }
 
+function pathKey(p: string): string {
+  return p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+}
+
 function matchProjectId(projects: Project[], cwd: string): string | null {
-  const needle = cwd.replace(/\//g, '\\').toLowerCase()
-  const hit = projects.find(
-    (p) => p.path.replace(/\//g, '\\').toLowerCase() === needle,
-  )
+  const needle = pathKey(cwd)
+  if (!needle) return null
+  const hit = projects.find((p) => pathKey(p.path) === needle)
   return hit?.id ?? null
+}
+
+function projectForSession(
+  projects: Project[],
+  session: Session | null,
+): Project | null {
+  if (!session) return null
+  const id =
+    session.projectId ??
+    (session.cwd ? matchProjectId(projects, session.cwd) : null)
+  return id ? (projects.find((p) => p.id === id) ?? null) : null
 }
 
 function initialState(): WorkspaceState {
@@ -200,6 +262,96 @@ function initialState(): WorkspaceState {
     permissionRequest: null,
     titleOverrides: stored?.titleOverrides ?? {},
     outgoingQueue: [],
+    contextUsage: null,
+    rightRailOpen: false,
+    rightTabs: [],
+    activeRightTabId: null,
+    terminalShellId: stored?.terminalShellId || 'powershell',
+    sidebarWidth: storedWidth(stored?.sidebarWidth, SIDEBAR_WIDTH_DEFAULT),
+    rightRailWidth: storedWidth(
+      stored?.rightRailWidth,
+      RIGHT_RAIL_WIDTH_DEFAULT,
+    ),
+  }
+}
+
+function makeTab(
+  kind: RightTab['kind'],
+  path: string | null = null,
+): RightTab {
+  return { id: uid('tab'), kind, path }
+}
+
+function dropFileTabs(state: WorkspaceState): {
+  rightTabs: RightTab[]
+  activeRightTabId: string | null
+} {
+  const rightTabs = state.rightTabs.filter((t) => t.kind !== 'file')
+  const keep = rightTabs.some((t) => t.id === state.activeRightTabId)
+  return {
+    rightTabs,
+    activeRightTabId: keep
+      ? state.activeRightTabId
+      : (rightTabs[rightTabs.length - 1]?.id ?? null),
+  }
+}
+
+function focusOrAddKind(
+  state: WorkspaceState,
+  kind: RightTab['kind'],
+  toggleIfActive: boolean,
+): WorkspaceState {
+  const match = state.rightTabs.find((t) => t.kind === kind)
+  if (match) {
+    if (
+      toggleIfActive &&
+      state.rightRailOpen &&
+      state.activeRightTabId === match.id
+    ) {
+      return { ...state, rightRailOpen: false }
+    }
+    return {
+      ...state,
+      rightRailOpen: true,
+      activeRightTabId: match.id,
+    }
+  }
+  const tab = makeTab(kind)
+  return {
+    ...state,
+    rightRailOpen: true,
+    rightTabs: [...state.rightTabs, tab],
+    activeRightTabId: tab.id,
+  }
+}
+
+function openFileTab(state: WorkspaceState, path: string): WorkspaceState {
+  const existing = state.rightTabs.find(
+    (t) => t.kind === 'file' && t.path && samePath(t.path, path),
+  )
+  if (existing) {
+    return {
+      ...state,
+      rightRailOpen: true,
+      activeRightTabId: existing.id,
+    }
+  }
+  const active = state.rightTabs.find((t) => t.id === state.activeRightTabId)
+  if (active?.kind === 'file' && !active.path) {
+    return {
+      ...state,
+      rightRailOpen: true,
+      rightTabs: state.rightTabs.map((t) =>
+        t.id === active.id ? { ...t, path } : t,
+      ),
+    }
+  }
+  const tab = makeTab('file', path)
+  return {
+    ...state,
+    rightRailOpen: true,
+    rightTabs: [...state.rightTabs, tab],
+    activeRightTabId: tab.id,
   }
 }
 
@@ -209,7 +361,6 @@ function applyStream(
 ): Session {
   const now = Date.now()
   if (event.type === 'title' && event.title) {
-    if (firstPromptTitle(session)) return session
     return { ...session, title: event.title, updatedAt: now }
   }
   if (event.type === 'text' || event.type === 'user') {
@@ -280,10 +431,14 @@ function applyStream(
 function reducer(state: WorkspaceState, action: Action): WorkspaceState {
   switch (action.type) {
     case 'new-chat': {
-      const projectId =
-        action.projectId !== undefined ? action.projectId : state.activeProjectId
-      const project = state.projects.find((p) => p.id === projectId)
-      const draft = makeDraft(projectId, project?.path)
+      const projectId = action.projectId ?? null
+      const project = projectId
+        ? state.projects.find((p) => p.id === projectId)
+        : undefined
+      const draft = makeDraft(
+        projectId,
+        project?.path ?? (projectId ? undefined : state.homeDir),
+      )
       return {
         ...state,
         activeProjectId: projectId,
@@ -291,6 +446,8 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         sessions: [draft, ...dropEmptyDrafts(state.sessions)],
         activeSessionId: draft.id,
         mobileNavOpen: false,
+        contextUsage: null,
+        ...dropFileTabs(state),
       }
     }
     case 'select-project': {
@@ -305,13 +462,25 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
     case 'select-session': {
       const session = state.sessions.find((s) => s.id === action.id)
       if (!session) return state
+      const projectId =
+        session.projectId ??
+        (session.cwd ? matchProjectId(state.projects, session.cwd) : null)
       return {
         ...state,
         activeSessionId: session.id,
-        activeProjectId: session.projectId ?? state.activeProjectId,
-        expandedProjectId: session.projectId ?? state.expandedProjectId,
-        sessions: dropEmptyDrafts(state.sessions, session.id),
+        activeProjectId: projectId,
+        expandedProjectId: projectId ?? state.expandedProjectId,
+        sessions: dropEmptyDrafts(state.sessions, session.id).map((s) =>
+          s.id === session.id && projectId && !s.projectId
+            ? { ...s, projectId }
+            : s,
+        ),
         mobileNavOpen: false,
+        contextUsage:
+          session.id === state.contextUsage?.sessionId
+            ? state.contextUsage
+            : null,
+        ...dropFileTabs(state),
       }
     }
     case 'add-project': {
@@ -326,6 +495,7 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         projectDialogOpen: false,
         editingProjectId: null,
         mobileNavOpen: false,
+        contextUsage: null,
       }
     }
     case 'rename-session': {
@@ -344,7 +514,15 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
       const overrides = { ...state.titleOverrides }
       delete overrides[action.id]
       if (state.activeSessionId !== action.id) {
-        return { ...state, sessions: remaining, titleOverrides: overrides }
+        return {
+          ...state,
+          sessions: remaining,
+          titleOverrides: overrides,
+          contextUsage:
+            state.contextUsage?.sessionId === action.id
+              ? null
+              : state.contextUsage,
+        }
       }
       const draft = makeDraft(state.activeProjectId)
       return {
@@ -352,11 +530,12 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         sessions: [draft, ...dropEmptyDrafts(remaining)],
         activeSessionId: draft.id,
         titleOverrides: overrides,
+        contextUsage: null,
       }
     }
     case 'send': {
       const text = action.text.trim()
-      if (!text) return state
+      if (!text && !action.images?.length) return state
       const now = Date.now()
       let sessions = state.sessions
       let sessionId = state.activeSessionId
@@ -372,6 +551,7 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         role: 'user',
         content: text,
         createdAt: now,
+        images: action.images?.length ? action.images : undefined,
       }
       const titled =
         session.messages.length === 0 ? titleFrom(text) : session.title
@@ -392,38 +572,43 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         thinkingIds: sessionId ? [...state.thinkingIds, sessionId] : state.thinkingIds,
       }
     }
-    case 'adopt-session': {
-      const now = Date.now()
-      const userMsg: Message = {
-        id: uid('msg'),
-        role: 'user',
-        content: action.text,
-        createdAt: now,
-      }
+    case 'bind-remote': {
+      const local = state.sessions.find((s) => s.id === action.localId)
+      if (!local) return state
       const next: Session = {
-        ...action.session,
-        title:
-          action.session.title ||
-          titleFrom(action.text),
-        updatedAt: now,
-        messages: [...action.session.messages, userMsg],
+        ...local,
+        id: action.sessionId,
+        cwd: action.cwd,
+        projectId: action.projectId,
         source: 'grok',
+        updatedAt: Date.now(),
       }
       const without = state.sessions.filter(
-        (s) => s.id !== action.localId && s.id !== next.id,
+        (s) => s.id !== action.localId && s.id !== action.sessionId,
       )
       return {
         ...state,
         sessions: [next, ...dropEmptyDrafts(without)],
-        activeSessionId: next.id,
-        thinkingIds: [...state.thinkingIds.filter((id) => id !== action.localId), next.id],
-        outgoingQueue: action.localId
-          ? state.outgoingQueue.map((q) =>
-              q.sessionId === action.localId
-                ? { ...q, sessionId: next.id }
-                : q,
-            )
-          : state.outgoingQueue,
+        activeSessionId:
+          state.activeSessionId === action.localId
+            ? action.sessionId
+            : state.activeSessionId,
+        thinkingIds: state.thinkingIds.map((id) =>
+          id === action.localId ? action.sessionId : id,
+        ),
+        hydratingId:
+          state.hydratingId === action.localId
+            ? action.sessionId
+            : state.hydratingId,
+        outgoingQueue: state.outgoingQueue.map((q) =>
+          q.sessionId === action.localId
+            ? { ...q, sessionId: action.sessionId }
+            : q,
+        ),
+        contextUsage:
+          state.contextUsage?.sessionId === action.localId
+            ? { ...state.contextUsage, sessionId: action.sessionId }
+            : state.contextUsage,
       }
     }
     case 'hydrate-session': {
@@ -438,8 +623,9 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
                 messages: action.messages,
                 title:
                   state.titleOverrides[s.id] ||
-                  firstPromptTitle({ ...s, messages: action.messages }) ||
                   action.title ||
+                  (!isPlaceholderTitle(s.title) ? s.title : '') ||
+                  firstPromptTitle({ ...s, messages: action.messages }) ||
                   s.title,
               }
             : s,
@@ -454,9 +640,9 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
           id: r.id,
           title:
             state.titleOverrides[r.id] ||
-            (prev ? firstPromptTitle(prev) : null) ||
             r.title ||
             prev?.title ||
+            (prev ? firstPromptTitle(prev) : null) ||
             '会话',
           projectId:
             matchProjectId(state.projects, r.cwd) ?? prev?.projectId ?? null,
@@ -470,10 +656,26 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
       return { ...state, sessions: [...byId.values()] }
     }
     case 'stream': {
+      if (
+        action.event.type === 'title' &&
+        state.titleOverrides[action.sessionId]
+      ) {
+        return state
+      }
       return {
         ...state,
         sessions: state.sessions.map((s) =>
           s.id === action.sessionId ? applyStream(s, action.event) : s,
+        ),
+      }
+    }
+    case 'set-session-title': {
+      const title = action.title.replace(/\s+/g, ' ').trim()
+      if (!title || state.titleOverrides[action.id]) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((s) =>
+          s.id === action.id ? { ...s, title, updatedAt: Date.now() } : s,
         ),
       }
     }
@@ -635,13 +837,152 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
           q.sessionId === action.from ? { ...q, sessionId: action.to } : q,
         ),
       }
+    case 'set-context-usage': {
+      const next = action.usage
+      if (!next) {
+        return state.contextUsage == null
+          ? state
+          : { ...state, contextUsage: null }
+      }
+      const prev = state.contextUsage
+      if (
+        prev &&
+        prev.sessionId === next.sessionId &&
+        next.used === 0 &&
+        next.total === 0 &&
+        (prev.used > 0 || prev.total > 0)
+      ) {
+        return state
+      }
+      if (
+        prev &&
+        prev.sessionId === next.sessionId &&
+        prev.used === next.used &&
+        prev.total === next.total &&
+        prev.percent === next.percent
+      ) {
+        return state
+      }
+      return { ...state, contextUsage: next }
+    }
+    case 'toggle-right-rail':
+      return { ...state, rightRailOpen: !state.rightRailOpen }
+    case 'set-right-rail':
+      return { ...state, rightRailOpen: action.open }
+    case 'open-right-panel': {
+      const kind =
+        action.panel === 'idle'
+          ? null
+          : action.panel === 'files'
+            ? 'file'
+            : action.panel
+      if (!kind) return { ...state, rightRailOpen: true, activeRightTabId: null }
+      return focusOrAddKind(state, kind, true)
+    }
+    case 'set-right-panel': {
+      const kind =
+        action.panel === 'idle'
+          ? null
+          : action.panel === 'files'
+            ? 'file'
+            : action.panel
+      if (!kind) {
+        return { ...state, rightRailOpen: true, activeRightTabId: null }
+      }
+      return focusOrAddKind(state, kind, false)
+    }
+    case 'open-file':
+      return openFileTab(state, action.path)
+    case 'set-preview-path': {
+      if (!action.path) {
+        const active = state.rightTabs.find(
+          (t) => t.id === state.activeRightTabId,
+        )
+        if (!active || active.kind !== 'file') return state
+        return {
+          ...state,
+          rightTabs: state.rightTabs.map((t) =>
+            t.id === active.id ? { ...t, path: null } : t,
+          ),
+        }
+      }
+      return openFileTab(state, action.path)
+    }
+    case 'select-right-tab':
+      if (!state.rightTabs.some((t) => t.id === action.id)) return state
+      return {
+        ...state,
+        rightRailOpen: true,
+        activeRightTabId: action.id,
+      }
+    case 'close-right-tab': {
+      const i = state.rightTabs.findIndex((t) => t.id === action.id)
+      if (i < 0) return state
+      const rightTabs = state.rightTabs.filter((t) => t.id !== action.id)
+      let activeRightTabId = state.activeRightTabId
+      if (activeRightTabId === action.id) {
+        activeRightTabId =
+          rightTabs[i]?.id ?? rightTabs[i - 1]?.id ?? null
+      }
+      return { ...state, rightTabs, activeRightTabId }
+    }
+    case 'add-right-tab': {
+      const tab = makeTab('file')
+      return {
+        ...state,
+        rightRailOpen: true,
+        rightTabs: [...state.rightTabs, tab],
+        activeRightTabId: tab.id,
+      }
+    }
+    case 'set-terminal-shell':
+      return { ...state, terminalShellId: action.id }
+    case 'set-sidebar-width':
+      return action.width === state.sidebarWidth
+        ? state
+        : { ...state, sidebarWidth: action.width }
+    case 'set-right-rail-width':
+      return action.width === state.rightRailWidth
+        ? state
+        : { ...state, rightRailWidth: action.width }
+    case 'patch-context-used': {
+      if (state.activeSessionId !== action.sessionId) return state
+      const prev =
+        state.contextUsage?.sessionId === action.sessionId
+          ? state.contextUsage
+          : null
+      const used = action.used
+      const total = prev?.total ?? 0
+      const percent =
+        total > 0 ? Math.min(100, Math.round((used / total) * 100)) : prev?.percent ?? 0
+      if (
+        prev &&
+        prev.used === used &&
+        prev.total === total &&
+        prev.percent === percent
+      ) {
+        return state
+      }
+      return {
+        ...state,
+        contextUsage: {
+          sessionId: action.sessionId,
+          used,
+          total,
+          percent,
+        },
+      }
+    }
     default:
       return state
   }
 }
 
 type WorkspaceApi = WorkspaceState & {
+  rightPanel: RightPanel
+  previewPath: string | null
   activeProject: Project | null
+  composerProject: Project | null
   activeSession: Session | null
   history: Session[]
   filteredHistory: Session[]
@@ -675,6 +1016,20 @@ type WorkspaceApi = WorkspaceState & {
   setProfile: (profile: Profile) => void
   notify: (message: string, kind?: 'info' | 'success' | 'error') => void
   resolvePermission: (optionId: string | null) => void
+  sessionCwd: string
+  toggleRightRail: () => void
+  openRightPanel: (panel: RightPanel) => void
+  setRightPanel: (panel: RightPanel) => void
+  closeRightRail: () => void
+  openLocalFile: (path: string) => void
+  openExternalUrl: (url: string) => void
+  setPreviewPath: (path: string | null) => void
+  selectRightTab: (id: string) => void
+  closeRightTab: (id: string) => void
+  addRightTab: () => void
+  setTerminalShell: (id: string) => void
+  setSidebarWidth: (width: number) => void
+  setRightRailWidth: (width: number) => void
 }
 
 const WorkspaceContext = createContext<WorkspaceApi | null>(null)
@@ -701,6 +1056,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       effort: state.effort,
       profile: state.profile,
       titleOverrides: state.titleOverrides,
+      terminalShellId: state.terminalShellId,
+      sidebarWidth: state.sidebarWidth,
+      rightRailWidth: state.rightRailWidth,
     })
   }, [
     state.projects,
@@ -711,6 +1069,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     state.effort,
     state.profile,
     state.titleOverrides,
+    state.terminalShellId,
+    state.sidebarWidth,
+    state.rightRailWidth,
   ])
 
   const notify = useCallback(
@@ -800,6 +1161,26 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           models: status.models,
           currentModelId: status.currentModelId,
         })
+        const remote = await fetchSessions()
+        if (cancelled) return
+        dispatch({ type: 'merge-remote', sessions: remote })
+        const storedId = loadState()?.activeSessionId
+        if (storedId && remote.some((s) => s.id === storedId)) {
+          const hit = remote.find((s) => s.id === storedId)
+          dispatch({ type: 'select-session', id: storedId })
+          if (hit) {
+            void hydrate({
+              id: hit.id,
+              title: hit.title,
+              projectId: null,
+              cwd: hit.cwd,
+              createdAt: hit.updatedAt,
+              updatedAt: hit.updatedAt,
+              messages: [],
+              source: 'grok',
+            })
+          }
+        }
         await refreshGit(stateRef.current.projects)
       } catch (err) {
         if (cancelled) return
@@ -813,7 +1194,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [refreshGit])
+  }, [hydrate, refreshGit])
 
   useEffect(() => {
     return () => {
@@ -825,6 +1206,29 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     state.projects.find((p) => p.id === state.activeProjectId) ?? null
   const activeSession =
     state.sessions.find((s) => s.id === state.activeSessionId) ?? null
+  const composerProject = projectForSession(state.projects, activeSession)
+  const sessionCwd =
+    activeSession?.cwd || composerProject?.path || state.homeDir || ''
+  const activeRightTab =
+    state.rightTabs.find((t) => t.id === state.activeRightTabId) ?? null
+  const previewPath =
+    activeRightTab?.kind === 'file' ? activeRightTab.path : null
+  const rightPanel: RightPanel = !state.rightRailOpen
+    ? 'idle'
+    : !activeRightTab
+      ? 'idle'
+      : activeRightTab.kind === 'file'
+        ? 'files'
+        : activeRightTab.kind
+
+  useEffect(() => {
+    const session = stateRef.current.sessions.find(
+      (s) => s.id === state.activeSessionId,
+    )
+    if (!session) return
+    const project = projectForSession(stateRef.current.projects, session)
+    if (project?.path) void refreshGit([project])
+  }, [state.activeSessionId, refreshGit])
   const history = useMemo(
     () => visibleSessions(state.sessions),
     [state.sessions],
@@ -835,8 +1239,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (!q) return history
     return history.filter((s) => {
       const project = state.projects.find((p) => p.id === s.projectId)
-      const title =
-        state.titleOverrides[s.id] || firstPromptTitle(s) || s.title
+      const title = displayTitle(s, state.titleOverrides[s.id])
       return (
         title.toLowerCase().includes(q) ||
         (project?.name.toLowerCase().includes(q) ?? false)
@@ -854,6 +1257,42 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const models = state.agentModels.length ? state.agentModels : MODELS
 
+  const thinkingActive = Boolean(
+    state.activeSessionId &&
+      state.thinkingIds.includes(state.activeSessionId),
+  )
+  const activeContextId = state.activeSessionId
+  const activeContextCwd = activeSession?.cwd ?? ''
+
+  useEffect(() => {
+    if (!activeContextId || !isGrokSessionId(activeContextId)) {
+      dispatch({ type: 'set-context-usage', usage: null })
+      return
+    }
+    const sessionId = activeContextId
+    const cwd = activeContextCwd
+    let cancelled = false
+    const pull = () => {
+      void fetchContextUsage(sessionId, cwd)
+        .then((usage) => {
+          if (cancelled) return
+          dispatch({
+            type: 'set-context-usage',
+            usage: { sessionId, ...usage },
+          })
+        })
+        .catch(() => undefined)
+    }
+    pull()
+    const timer = thinkingActive
+      ? window.setInterval(pull, 1600)
+      : 0
+    return () => {
+      cancelled = true
+      if (timer) window.clearInterval(timer)
+    }
+  }, [activeContextId, activeContextCwd, thinkingActive])
+
   const send = useCallback(
     (text: string, files?: File[]) => {
       void (async () => {
@@ -862,7 +1301,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           notify('本机 Grok Build 未连接', 'error')
           return
         }
-        const payload = text.trim()
+        const imageFiles = (files ?? []).filter(isImageFile)
+        const otherFiles = (files ?? []).filter((f) => !isImageFile(f))
+        const images = imageFiles.length
+          ? await filesToChatImages(imageFiles)
+          : []
+        const payload =
+          text.trim() ||
+          (otherFiles.length
+            ? `请查看附件：${otherFiles.map((f) => f.name).join('、')}`
+            : '')
         if (!payload && !files?.length) return
 
         let session =
@@ -880,7 +1328,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           return
         }
 
-        let sessionId = session?.id ?? null
+        dispatch({
+          type: 'send',
+          text: payload,
+          images,
+        })
+        let sessionId = stateRef.current.activeSessionId
+        if (!sessionId) return
+
         if (!session || session.source !== 'grok') {
           try {
             const created = await createRemoteSession({
@@ -889,36 +1344,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
               model: snap.model,
               effort: snap.effort,
             })
-            const grokSession: Session = {
-              id: created.sessionId,
-              title: titleFrom(payload),
-              projectId: project?.id ?? null,
-              cwd,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-              messages: [],
-              source: 'grok',
-            }
             dispatch({
-              type: 'adopt-session',
-              localId: session?.id ?? null,
-              session: grokSession,
-              text: payload || `请查看附件：${files?.map((f) => f.name).join('、')}`,
+              type: 'bind-remote',
+              localId: sessionId,
+              sessionId: created.sessionId,
+              cwd,
+              projectId: project?.id ?? null,
             })
             sessionId = created.sessionId
           } catch (err) {
+            dispatch({ type: 'thinking', sessionId, on: false })
             notify(err instanceof Error ? err.message : '无法创建会话', 'error')
             return
           }
-        } else {
-          dispatch({
-            type: 'send',
-            text: payload || `请查看附件：${files?.map((f) => f.name).join('、')}`,
-          })
-          sessionId = session.id
         }
-
-        if (!sessionId) return
         const ac = new AbortController()
         promptAbort.current.get(sessionId)?.abort()
         promptAbort.current.set(sessionId, ac)
@@ -936,6 +1375,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
                     title: event.title,
                     options: event.options,
                   },
+                })
+                return
+              }
+              if (event.type === 'usage') {
+                dispatch({
+                  type: 'patch-context-used',
+                  sessionId,
+                  used: event.used,
                 })
                 return
               }
@@ -966,6 +1413,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           }
           dispatch({ type: 'thinking', sessionId, on: false })
           dispatch({ type: 'set-permission', request: null })
+          const sid = sessionId
+          const titleCwd = cwd
+          const pullTitle = () => {
+            if (stateRef.current.titleOverrides[sid]) return
+            void fetchSessionTitle(sid, titleCwd)
+              .then((title) => {
+                if (!title || stateRef.current.titleOverrides[sid]) return
+                dispatch({ type: 'set-session-title', id: sid, title })
+              })
+              .catch(() => undefined)
+          }
+          pullTitle()
+          const timer = window.setTimeout(pullTitle, 1800)
+          timers.current.push(timer)
         }
       })()
     },
@@ -974,7 +1435,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const api: WorkspaceApi = {
     ...state,
+    rightPanel,
+    previewPath,
     activeProject,
+    composerProject,
     activeSession,
     history,
     filteredHistory,
@@ -1005,7 +1469,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     selectSession: (id) => {
       dispatch({ type: 'select-session', id })
       const session = stateRef.current.sessions.find((s) => s.id === id)
-      if (session) void hydrate(session)
+      if (!session) return
+      void hydrate(session)
+      const project = projectForSession(stateRef.current.projects, session)
+      if (project) void refreshGit([project])
     },
     addProject: ({ name, path, branch }) => {
       const nextBranch = branch?.trim() ?? ''
@@ -1164,6 +1631,34 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setSettingsOpen: (open) => dispatch({ type: 'set-settings', open }),
     setProfile: (profile) => dispatch({ type: 'set-profile', profile }),
     notify,
+    sessionCwd,
+    toggleRightRail: () => dispatch({ type: 'toggle-right-rail' }),
+    openRightPanel: (panel) => dispatch({ type: 'open-right-panel', panel }),
+    setRightPanel: (panel) => dispatch({ type: 'set-right-panel', panel }),
+    closeRightRail: () => dispatch({ type: 'set-right-rail', open: false }),
+    openLocalFile: (path) => {
+      const next = path.trim()
+      if (!next) return
+      if (isWebUrl(next)) return
+      dispatch({ type: 'open-file', path: next })
+    },
+    openExternalUrl: (url) => {
+      const target = url.trim()
+      if (!target) return
+      if (!isWebUrl(target) && !looksLikeHtml(target)) return
+      void openExternal(target).catch((err: unknown) => {
+        notify(err instanceof Error ? err.message : '无法打开', 'error')
+      })
+    },
+    setPreviewPath: (path) => dispatch({ type: 'set-preview-path', path }),
+    selectRightTab: (id) => dispatch({ type: 'select-right-tab', id }),
+    closeRightTab: (id) => dispatch({ type: 'close-right-tab', id }),
+    addRightTab: () => dispatch({ type: 'add-right-tab' }),
+    setTerminalShell: (id) => dispatch({ type: 'set-terminal-shell', id }),
+    setSidebarWidth: (width) =>
+      dispatch({ type: 'set-sidebar-width', width }),
+    setRightRailWidth: (width) =>
+      dispatch({ type: 'set-right-rail-width', width }),
     resolvePermission: (optionId) => {
       const req = stateRef.current.permissionRequest
       if (!req) return

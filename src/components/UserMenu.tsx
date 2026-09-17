@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { IconGear } from '../icons'
+import { IconGear, IconInfo } from '../icons'
 import { initials } from '../lib/profile'
 import { useWorkspace } from '../workspace'
+import { AboutDialog } from './AboutDialog'
 
 export function UserMenu() {
   const { profile, setSettingsOpen } = useWorkspace()
   const [open, setOpen] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ bottom: 16, left: 16 })
@@ -85,10 +87,22 @@ export function UserMenu() {
                 <IconGear />
                 设置
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false)
+                  setAboutOpen(true)
+                }}
+              >
+                <IconInfo />
+                关于版本
+              </button>
             </div>,
             document.body,
           )
         : null}
+      {aboutOpen ? <AboutDialog onClose={() => setAboutOpen(false)} /> : null}
     </>
   )
 }

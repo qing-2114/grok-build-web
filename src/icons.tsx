@@ -31,6 +31,21 @@ export function IconGear(props: IconProps) {
   )
 }
 
+export function IconInfo(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="5.2" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M8 7.2V11.2"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      <circle cx="8" cy="5.2" r="0.8" fill="currentColor" />
+    </Svg>
+  )
+}
+
 export function IconGrok(props: IconProps) {
   return (
     <svg

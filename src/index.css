@@ -2197,6 +2197,12 @@ textarea {
   filter: brightness(1.05);
 }
 
+.btn-solid:disabled,
+.btn-ghost:disabled {
+  opacity: 0.45;
+  filter: none;
+}
+
 .dialog-foot {
   display: flex;
   justify-content: flex-end;
@@ -2302,6 +2308,92 @@ textarea {
 
 .user-menu button:hover {
   background: var(--hover);
+}
+
+.about-root {
+  z-index: 95;
+}
+
+.about-dialog {
+  width: min(460px, 100%);
+}
+
+.about-versions {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.about-row {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--void);
+  border: 1px solid var(--line);
+}
+
+.about-row dt {
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+.about-ver {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.about-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.about-status {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.about-status.is-ok {
+  color: var(--ok);
+}
+
+.about-status.is-update {
+  color: var(--warn);
+}
+
+.about-status.is-warn {
+  color: var(--warn);
+}
+
+.about-status.is-error {
+  color: var(--danger);
+}
+
+.about-repo {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+
+.about-link {
+  color: var(--link);
+}
+
+.about-link:hover {
+  text-decoration: underline;
+}
+
+.about-foot {
+  justify-content: space-between;
 }
 
 .settings {

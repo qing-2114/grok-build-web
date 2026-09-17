@@ -41,6 +41,7 @@ import {
   usageFromParams,
   type StreamEvent,
 } from './transcript.ts'
+import { readAppVersion, updateApp } from './app-version.ts'
 
 type SessionListItem = {
   sessionId: string
@@ -258,6 +259,22 @@ async function handle(
       models: acp.models,
       currentModelId: acp.currentModelId,
     })
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/app/version')) {
+    sendJson(res, 200, await readAppVersion())
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/app/update')) {
+    try {
+      sendJson(res, 200, await updateApp())
+    } catch (err) {
+      sendJson(res, 400, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
     return
   }
 

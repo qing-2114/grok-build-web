@@ -22,6 +22,8 @@ function SessionRow({
   session,
   override,
   active,
+  thinking,
+  unread,
   renaming,
   renameRef,
   onSelect,
@@ -34,6 +36,8 @@ function SessionRow({
   session: Session
   override?: string
   active: boolean
+  thinking: boolean
+  unread: boolean
   renaming: { id: string; title: string } | null
   renameRef: RefObject<HTMLInputElement | null>
   onSelect: () => void
@@ -63,12 +67,13 @@ function SessionRow({
     )
   }
   return (
-    <li className="session-row">
+    <li className={thinking ? 'session-row is-busy' : 'session-row'}>
       <button
         type="button"
         className={
           active ? 'rail-item session-item is-active' : 'rail-item session-item'
         }
+        aria-busy={thinking || undefined}
         onClick={onSelect}
         onContextMenu={(e) => {
           e.preventDefault()
@@ -78,6 +83,15 @@ function SessionRow({
       >
         <span className="rail-text">{label}</span>
       </button>
+      {thinking ? (
+        <span className="session-mark" aria-hidden="true">
+          <i className="session-spinner" />
+        </span>
+      ) : unread ? (
+        <span className="session-mark" aria-label="有新回复">
+          <i className="session-unread" />
+        </span>
+      ) : null}
       <button
         type="button"
         className="session-delete"
@@ -117,6 +131,8 @@ export function Sidebar() {
     setSidebarWidth,
     setMobileNav,
     titleOverrides,
+    thinkingIds,
+    unreadIds,
   } = useWorkspace()
 
   const [searchOpen, setSearchOpen] = useState(false)
@@ -349,6 +365,8 @@ export function Sidebar() {
                           session={session}
                           override={titleOverrides[session.id]}
                           active={session.id === activeSessionId}
+                          thinking={thinkingIds.includes(session.id)}
+                          unread={unreadIds.includes(session.id)}
                           renaming={renaming}
                           renameRef={renameRef}
                           onSelect={() => selectSession(session.id)}
@@ -395,6 +413,8 @@ export function Sidebar() {
                   session={session}
                   override={titleOverrides[session.id]}
                   active={session.id === activeSessionId}
+                  thinking={thinkingIds.includes(session.id)}
+                  unread={unreadIds.includes(session.id)}
                   renaming={renaming}
                   renameRef={renameRef}
                   onSelect={() => selectSession(session.id)}

@@ -98,6 +98,7 @@ export function FileExplorer() {
     previewPath,
     setPreviewPath,
     openExternalUrl,
+    revealInExplorer,
     notify,
   } = useWorkspace()
   const [filter, setFilter] = useState('')
@@ -247,7 +248,18 @@ export function FileExplorer() {
             }
             setPreviewPath(joinPath(previewDir, path))
           }}
-          onOpenUrl={openExternalUrl}
+          onOpenUrl={(url) => {
+            if (isWebUrl(url)) {
+              openExternalUrl(url)
+              return
+            }
+            openExternalUrl(isAbsPath(url) ? url : joinPath(previewDir, url))
+          }}
+          onReveal={(path) => {
+            revealInExplorer(
+              isAbsPath(path) ? path : joinPath(previewDir, path),
+            )
+          }}
           resolveMedia={resolveMedia}
         />
         {preview.truncated ? (

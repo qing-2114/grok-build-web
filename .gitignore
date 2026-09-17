@@ -15,6 +15,8 @@ dist-ssr
 .tmp/
 .tmp-verify/
 .tmp-preview/
+__pycache__/
+*.pyc
 AGENTS.md
 handoff.md
 

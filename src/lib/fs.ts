@@ -132,10 +132,33 @@ export async function killTerminal(id: string): Promise<void> {
   await parseJson(res)
 }
 
-export async function openExternal(target: string): Promise<void> {
-  const body = isWebUrl(target) || looksLikeHtml(target)
-    ? { url: target, path: target }
-    : { path: target }
+export async function openExternal(
+  target: string,
+  cwd?: string,
+): Promise<void> {
+  const body: Record<string, string> = isWebUrl(target)
+    ? { url: target }
+    : looksLikeHtml(target)
+      ? { path: target, url: target }
+      : { path: target }
+  if (cwd && !isWebUrl(target)) body.cwd = cwd
+  const res = await fetch('/api/open-external', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  await parseJson(res)
+}
+
+export async function revealInExplorer(
+  target: string,
+  cwd?: string,
+): Promise<void> {
+  const body: Record<string, string | boolean> = {
+    path: target,
+    reveal: true,
+  }
+  if (cwd) body.cwd = cwd
   const res = await fetch('/api/open-external', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

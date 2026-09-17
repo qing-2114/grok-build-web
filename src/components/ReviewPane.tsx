@@ -3,6 +3,7 @@ import { IconDiff } from '../icons'
 import { fetchGitChanges, fetchGitDiff, type GitChange } from '../lib/fs'
 import { looksLikeFilePath } from '../lib/paths'
 import { useWorkspace } from '../workspace'
+import { PathLink } from './PathLink'
 
 const STATUS_LABEL: Record<GitChange['status'], string> = {
   modified: '修改',
@@ -35,7 +36,8 @@ function DiffView({ patch }: { patch: string }) {
 }
 
 export function ReviewPane() {
-  const { sessionCwd, activeSession, openLocalFile } = useWorkspace()
+  const { sessionCwd, activeSession, openLocalFile, openExternalUrl, revealInExplorer } =
+    useWorkspace()
   const [files, setFiles] = useState<GitChange[]>([])
   const [isRepo, setIsRepo] = useState(true)
   const [branch, setBranch] = useState('')
@@ -173,13 +175,14 @@ export function ReviewPane() {
           <ul>
             {mentioned.map((p) => (
               <li key={p}>
-                <button
-                  type="button"
-                  className="file-link"
-                  onClick={() => openLocalFile(p)}
+                <PathLink
+                  href={p}
+                  onOpenFile={openLocalFile}
+                  onOpenUrl={openExternalUrl}
+                  onReveal={revealInExplorer}
                 >
                   {p}
-                </button>
+                </PathLink>
               </li>
             ))}
           </ul>

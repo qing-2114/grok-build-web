@@ -16,6 +16,7 @@ import {
   interruptTerminal,
   openExternal,
   openLocalHtml,
+  revealInExplorer,
   startTerminal,
   streamTerminal,
   writeTerminal,
@@ -431,12 +432,21 @@ async function handle(
   if (match(method, path, 'POST', '/api/open-external')) {
     const body = await readJson(req)
     const target = String(body.url ?? body.path ?? '')
-    if (/\.html?$/i.test(target) && !/^https?:\/\//i.test(target)) {
-      openLocalHtml(target)
-    } else {
-      openExternal(target)
+    const cwd = String(body.cwd ?? '')
+    try {
+      if (body.reveal) {
+        revealInExplorer(String(body.path ?? target), cwd)
+      } else if (/\.html?$/i.test(target) && !/^https?:\/\//i.test(target)) {
+        openLocalHtml(target, cwd)
+      } else {
+        openExternal(target)
+      }
+      sendJson(res, 200, { ok: true })
+    } catch (err) {
+      sendJson(res, 400, {
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
-    sendJson(res, 200, { ok: true })
     return
   }
 

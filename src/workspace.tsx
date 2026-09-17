@@ -50,7 +50,7 @@ import {
 } from './lib/title'
 import { uid } from './lib/uid'
 import { filesToChatImages, isImageFile } from './lib/images'
-import { openExternal } from './lib/fs'
+import { openExternal, revealInExplorer as revealPath } from './lib/fs'
 
 import { MODELS } from './types'
 import type {
@@ -88,6 +88,7 @@ export type WorkspaceState = {
   settingsOpen: boolean
   profile: Profile
   thinkingIds: string[]
+  unreadIds: string[]
   toast: { id: string; text: string; kind: 'info' | 'success' | 'error' } | null
   connection: ConnectionStatus
   connectionError: string | null
@@ -226,6 +227,27 @@ function projectForSession(
   return id ? (projects.find((p) => p.id === id) ?? null) : null
 }
 
+function sessionOpenContext(state: WorkspaceState): {
+  cwd: string
+  hints: string[]
+} {
+  const session = state.sessions.find((s) => s.id === state.activeSessionId)
+  const project = projectForSession(state.projects, session ?? null)
+  const cwd = session?.cwd || project?.path || state.homeDir || ''
+  const hints: string[] = []
+  for (const m of session?.messages ?? []) {
+    if (m.tool?.target) hints.push(m.tool.target)
+  }
+  return { cwd, hints }
+}
+
+function resolveFromState(state: WorkspaceState, path: string): string {
+  const next = path.trim()
+  if (!next || isWebUrl(next)) return next
+  const { cwd, hints } = sessionOpenContext(state)
+  return resolveOpenPath(next, cwd, hints)
+}
+
 function initialState(): WorkspaceState {
   const stored = loadState()
   const draft = makeDraft(stored?.activeProjectId ?? SEED_PROJECTS[0]?.id ?? null)
@@ -258,6 +280,7 @@ function initialState(): WorkspaceState {
       branches: Array.isArray(p.branches) ? p.branches : [],
     })),
     thinkingIds: [],
+    unreadIds: [],
     toast: null,
     connection: 'connecting',
     connectionError: null,
@@ -489,6 +512,7 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         activeSessionId: session.id,
         activeProjectId: projectId,
         expandedProjectId: projectId ?? state.expandedProjectId,
+        unreadIds: state.unreadIds.filter((id) => id !== session.id),
         sessions: dropEmptyDrafts(state.sessions, session.id).map((s) =>
           s.id === session.id && projectId && !s.projectId
             ? { ...s, projectId }
@@ -532,11 +556,15 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
       const remaining = state.sessions.filter((s) => s.id !== action.id)
       const overrides = { ...state.titleOverrides }
       delete overrides[action.id]
+      const thinkingIds = state.thinkingIds.filter((id) => id !== action.id)
+      const unreadIds = state.unreadIds.filter((id) => id !== action.id)
       if (state.activeSessionId !== action.id) {
         return {
           ...state,
           sessions: remaining,
           titleOverrides: overrides,
+          thinkingIds,
+          unreadIds,
           contextUsage:
             state.contextUsage?.sessionId === action.id
               ? null
@@ -549,6 +577,8 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         sessions: [draft, ...dropEmptyDrafts(remaining)],
         activeSessionId: draft.id,
         titleOverrides: overrides,
+        thinkingIds,
+        unreadIds,
         contextUsage: null,
       }
     }
@@ -588,7 +618,13 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         ...state,
         sessions,
         activeSessionId: sessionId,
-        thinkingIds: sessionId ? [...state.thinkingIds, sessionId] : state.thinkingIds,
+        thinkingIds:
+          sessionId && !state.thinkingIds.includes(sessionId)
+            ? [...state.thinkingIds, sessionId]
+            : state.thinkingIds,
+        unreadIds: sessionId
+          ? state.unreadIds.filter((id) => id !== sessionId)
+          : state.unreadIds,
       }
     }
     case 'bind-remote': {
@@ -613,6 +649,9 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
             ? action.sessionId
             : state.activeSessionId,
         thinkingIds: state.thinkingIds.map((id) =>
+          id === action.localId ? action.sessionId : id,
+        ),
+        unreadIds: state.unreadIds.map((id) =>
           id === action.localId ? action.sessionId : id,
         ),
         hydratingId:
@@ -702,11 +741,21 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
       const has = state.thinkingIds.includes(action.sessionId)
       if (action.on && has) return state
       if (!action.on && !has) return state
+      if (action.on) {
+        return {
+          ...state,
+          thinkingIds: [...state.thinkingIds, action.sessionId],
+          unreadIds: state.unreadIds.filter((id) => id !== action.sessionId),
+        }
+      }
       return {
         ...state,
-        thinkingIds: action.on
-          ? [...state.thinkingIds, action.sessionId]
-          : state.thinkingIds.filter((id) => id !== action.sessionId),
+        thinkingIds: state.thinkingIds.filter((id) => id !== action.sessionId),
+        unreadIds:
+          action.sessionId !== state.activeSessionId &&
+          !state.unreadIds.includes(action.sessionId)
+            ? [...state.unreadIds, action.sessionId]
+            : state.unreadIds,
       }
     }
     case 'set-hydrating':
@@ -1043,6 +1092,7 @@ type WorkspaceApi = WorkspaceState & {
   closeRightRail: () => void
   openLocalFile: (path: string) => void
   openExternalUrl: (url: string) => void
+  revealInExplorer: (path: string) => void
   setPreviewPath: (path: string | null) => void
   selectRightTab: (id: string) => void
   closeRightTab: (id: string) => void
@@ -1693,26 +1743,42 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const next = path.trim()
       if (!next) return
       if (isWebUrl(next)) return
-      const snap = stateRef.current
-      const session = snap.sessions.find((s) => s.id === snap.activeSessionId)
-      const project = projectForSession(snap.projects, session ?? null)
-      const cwd = session?.cwd || project?.path || snap.homeDir || ''
-      const hints: string[] = []
-      for (const m of session?.messages ?? []) {
-        if (m.tool?.target) hints.push(m.tool.target)
-      }
       dispatch({
         type: 'open-file',
-        path: resolveOpenPath(next, cwd, hints),
+        path: resolveFromState(stateRef.current, next),
       })
     },
     openExternalUrl: (url) => {
       const target = url.trim()
       if (!target) return
-      if (!isWebUrl(target) && !looksLikeHtml(target)) return
-      void openExternal(target).catch((err: unknown) => {
-        notify(err instanceof Error ? err.message : '无法打开', 'error')
-      })
+      if (isWebUrl(target)) {
+        void openExternal(target).catch((err: unknown) => {
+          notify(err instanceof Error ? err.message : '无法打开', 'error')
+        })
+        return
+      }
+      if (!looksLikeHtml(target)) return
+      const snap = stateRef.current
+      const abs = resolveFromState(snap, target)
+      void openExternal(abs, sessionOpenContext(snap).cwd).catch(
+        (err: unknown) => {
+          notify(err instanceof Error ? err.message : '无法打开', 'error')
+        },
+      )
+    },
+    revealInExplorer: (path) => {
+      const next = path.trim()
+      if (!next || isWebUrl(next)) return
+      const snap = stateRef.current
+      const abs = resolveFromState(snap, next)
+      void revealPath(abs, sessionOpenContext(snap).cwd).catch(
+        (err: unknown) => {
+          notify(
+            err instanceof Error ? err.message : '无法打开资源管理器',
+            'error',
+          )
+        },
+      )
     },
     setPreviewPath: (path) => dispatch({ type: 'set-preview-path', path }),
     selectRightTab: (id) => dispatch({ type: 'select-right-tab', id }),

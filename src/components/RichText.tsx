@@ -1,7 +1,8 @@
-import { useState, type MouseEvent, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { IconCheck, IconCopy } from '../icons'
-import { isWebUrl, looksLikeFilePath, looksLikeHtml } from '../lib/paths'
+import { isWebUrl, looksLikeFilePath } from '../lib/paths'
 import type { ChatImage } from '../types'
+import { PathLink } from './PathLink'
 
 const IMAGE_TOKEN = /\[Image #(\d+)\]/
 const MD_IMAGE = /!\[([^\]]*)\]\(([^)]+)\)/
@@ -12,6 +13,7 @@ const SPLIT =
 type Openers = {
   onOpenFile?: (path: string) => void
   onOpenUrl?: (url: string) => void
+  onReveal?: (path: string) => void
   resolveMedia?: (src: string) => string | null
 }
 
@@ -20,32 +22,20 @@ function FileOrWebLink({
   children,
   onOpenFile,
   onOpenUrl,
+  onReveal,
 }: {
   href: string
   children: ReactNode
 } & Openers) {
-  const web = isWebUrl(href)
-  const html = looksLikeHtml(href)
-  function onClick(e: MouseEvent<HTMLAnchorElement>) {
-    e.preventDefault()
-    if ((e.ctrlKey || e.metaKey) && (web || html)) {
-      onOpenUrl?.(href)
-      return
-    }
-    if (web) return
-    onOpenFile?.(href)
-  }
   return (
-    <a
-      className="file-link"
-      href={web ? href : '#'}
-      onClick={onClick}
-      title={
-        web || html ? 'Ctrl+单击在默认浏览器打开' : '单击在右侧栏预览'
-      }
+    <PathLink
+      href={href}
+      onOpenFile={onOpenFile}
+      onOpenUrl={onOpenUrl}
+      onReveal={onReveal}
     >
       {children}
-    </a>
+    </PathLink>
   )
 }
 
@@ -252,15 +242,17 @@ export function RichText({
   images = [],
   onOpenFile,
   onOpenUrl,
+  onReveal,
   resolveMedia,
 }: {
   text: string
   images?: ChatImage[]
   onOpenFile?: (path: string) => void
   onOpenUrl?: (url: string) => void
+  onReveal?: (path: string) => void
   resolveMedia?: (src: string) => string | null
 }) {
-  const openers: Openers = { onOpenFile, onOpenUrl, resolveMedia }
+  const openers: Openers = { onOpenFile, onOpenUrl, onReveal, resolveMedia }
   const lines = text.replace(/\r\n/g, '\n').split('\n')
   const nodes: ReactNode[] = []
   let i = 0

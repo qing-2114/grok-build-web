@@ -14,6 +14,7 @@ import { displayTitle } from '../lib/title'
 import type { ChatImage, Message, ToolCall } from '../types'
 import { useWorkspace } from '../workspace'
 import { Composer } from './Composer'
+import { PathLink } from './PathLink'
 import { RichText } from './RichText'
 
 function toolStatusLabel(status: ToolCall['status'] | string | undefined): string {
@@ -25,9 +26,13 @@ function toolStatusLabel(status: ToolCall['status'] | string | undefined): strin
 function ChangeCard({
   tools,
   onOpenFile,
+  onOpenUrl,
+  onReveal,
 }: {
   tools: Message[]
   onOpenFile: (path: string) => void
+  onOpenUrl: (url: string) => void
+  onReveal: (path: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const many = tools.length > 1
@@ -56,13 +61,15 @@ function ChangeCard({
             <li key={t.id}>
               <span className="change-name">{t.tool?.name}</span>
               {looksLikeFilePath(t.tool?.target ?? '') ? (
-                <button
-                  type="button"
+                <PathLink
+                  href={t.tool?.target ?? ''}
                   className="change-target is-link"
-                  onClick={() => onOpenFile(t.tool?.target ?? '')}
+                  onOpenFile={onOpenFile}
+                  onOpenUrl={onOpenUrl}
+                  onReveal={onReveal}
                 >
                   {t.tool?.target}
-                </button>
+                </PathLink>
               ) : (
                 <span className="change-target">{t.tool?.target}</span>
               )}
@@ -164,6 +171,7 @@ export function ChatPane() {
     toggleRightRail,
     openLocalFile,
     openExternalUrl,
+    revealInExplorer,
   } = useWorkspace()
 
   const messages = activeSession?.messages ?? []
@@ -247,6 +255,8 @@ export function ChatPane() {
             key={tools[0].id}
             tools={tools}
             onOpenFile={openLocalFile}
+            onOpenUrl={openExternalUrl}
+            onReveal={revealInExplorer}
           />,
         )
         continue
@@ -258,6 +268,7 @@ export function ChatPane() {
             images={imagesBefore(messages, i)}
             onOpenFile={openLocalFile}
             onOpenUrl={openExternalUrl}
+            onReveal={revealInExplorer}
           />
           {copyIds.has(m.id) ? (
             <div className="doc-actions">

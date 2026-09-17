@@ -439,15 +439,63 @@ textarea {
   position: relative;
   display: flex;
   align-items: center;
-  width: fit-content;
+  width: min(100%, 18rem);
   max-width: min(100%, 18rem);
+}
+
+.session-mark {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  z-index: 1;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.session-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(244, 241, 234, 0.22);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: session-spin 0.7s linear infinite;
+}
+
+.session-unread {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 0 3px rgba(244, 241, 234, 0.16);
+  animation: session-unread-in 0.22s ease;
+}
+
+@keyframes session-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes session-unread-in {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .session-delete {
   position: absolute;
   right: 4px;
   top: 50%;
-  z-index: 1;
+  z-index: 2;
   width: 22px;
   height: 22px;
   border-radius: 6px;
@@ -463,13 +511,17 @@ textarea {
   opacity: 1;
 }
 
+.session-row:hover .session-mark {
+  opacity: 0;
+}
+
 .session-delete:hover {
   background: var(--hover);
   color: var(--danger);
 }
 
 .session-row .session-item {
-  width: auto;
+  width: 100%;
   max-width: 100%;
   padding-right: 28px;
 }
@@ -1162,6 +1214,10 @@ textarea {
 .file-link .inline-code.is-link {
   color: var(--link);
   background: rgba(140, 180, 255, 0.12);
+}
+
+.path-link-menu {
+  min-width: 196px;
 }
 
 .code-block-wrap {

@@ -8,7 +8,7 @@ import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { normalizeFsPath } from './fs.ts'
+import { normalizeFsPath, resolveInRoot } from './fs.ts'
 
 export type ShellInfo = {
   id: string
@@ -383,14 +383,53 @@ export function openExternal(target: string): void {
   child.unref()
 }
 
-export function openLocalHtml(path: string): void {
-  const abs = normalizeFsPath(path)
+function absFrom(path: string, cwd = ''): string {
+  const raw = path.trim().replace(/^file:\/\//i, '')
+  if (!raw) return ''
+  return cwd ? resolveInRoot(cwd, raw) : normalizeFsPath(raw)
+}
+
+export function openLocalHtml(path: string, cwd = ''): void {
+  const abs = absFrom(path, cwd)
   if (!abs || !existsSync(abs)) throw new Error('文件不存在')
   if (!/\.html?$/i.test(abs)) throw new Error('不是网页文件')
   const child = spawn('cmd.exe', ['/c', 'start', '', abs], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
+  })
+  child.unref()
+}
+
+export function revealInExplorer(path: string, cwd = ''): void {
+  const abs = absFrom(path, cwd)
+  if (!abs) throw new Error('路径无效')
+  let target = abs
+  if (!existsSync(target)) {
+    const parent = dirname(target)
+    if (!parent || !existsSync(parent)) throw new Error('文件不存在')
+    target = parent
+  }
+  if (process.platform === 'win32') {
+    const child = spawn('explorer.exe', [`/select,${target}`], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    child.unref()
+    return
+  }
+  if (process.platform === 'darwin') {
+    const child = spawn('open', ['-R', target], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    child.unref()
+    return
+  }
+  const folder = existsSync(target) ? dirname(target) : target
+  const child = spawn('xdg-open', [folder], {
+    detached: true,
+    stdio: 'ignore',
   })
   child.unref()
 }

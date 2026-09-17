@@ -40,6 +40,19 @@ async function parseJson<T>(res: Response): Promise<T> {
   return data
 }
 
+export function friendlyFsError(err: unknown, fallback: string): string {
+  const msg = err instanceof Error ? err.message : ''
+  if (
+    !msg ||
+    msg === 'not found' ||
+    /^ENOENT\b/.test(msg) ||
+    /no such file or directory/i.test(msg)
+  ) {
+    return fallback
+  }
+  return msg
+}
+
 export async function listDir(path: string): Promise<FsEntry[]> {
   const res = await fetch(`/api/fs/list?path=${encodeURIComponent(path)}`)
   const data = await parseJson<{ entries: FsEntry[] }>(res)

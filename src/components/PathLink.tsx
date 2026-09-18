@@ -9,6 +9,7 @@ import {
 import { createPortal } from 'react-dom'
 import { IconFolder, IconMonitor } from '../icons'
 import { isWebUrl, looksLikeFilePath, looksLikeHtml } from '../lib/paths'
+import { fileManagerName, modKeyLabel } from '../lib/platform'
 
 export function PathLink({
   href,
@@ -93,7 +94,7 @@ export function PathLink({
   }, [menu])
 
   const hint = canBrowser
-    ? 'Ctrl+单击在默认浏览器打开 · 右键更多'
+    ? `${modKeyLabel()}+单击在默认浏览器打开 · 右键更多`
     : '单击在右侧栏预览 · 右键更多'
 
   return (
@@ -142,7 +143,7 @@ export function PathLink({
                   }}
                 >
                   <IconFolder />
-                  <span>在资源管理器中打开</span>
+                  <span>在{fileManagerName()}中打开</span>
                 </button>
               ) : null}
             </div>,

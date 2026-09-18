@@ -51,6 +51,7 @@ import {
 import { uid } from './lib/uid'
 import { filesToChatImages, isImageFile } from './lib/images'
 import { openExternal, revealInExplorer as revealPath } from './lib/fs'
+import { fileManagerName } from './lib/platform'
 
 import { MODELS } from './types'
 import type {
@@ -295,7 +296,7 @@ function initialState(): WorkspaceState {
     rightRailOpen: false,
     rightTabs: [],
     activeRightTabId: null,
-    terminalShellId: stored?.terminalShellId || 'powershell',
+    terminalShellId: stored?.terminalShellId || '',
     sidebarWidth: storedWidth(stored?.sidebarWidth, SIDEBAR_WIDTH_DEFAULT),
     rightRailWidth: storedWidth(
       stored?.rightRailWidth,
@@ -1774,7 +1775,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       void revealPath(abs, sessionOpenContext(snap).cwd).catch(
         (err: unknown) => {
           notify(
-            err instanceof Error ? err.message : '无法打开资源管理器',
+            err instanceof Error ? err.message : `无法打开${fileManagerName()}`,
             'error',
           )
         },

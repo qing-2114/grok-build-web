@@ -304,11 +304,21 @@ $s.Description = {ps_quote("启动 Grok Build Web 操作台")}
 def create_unix_launcher(desktop: Path) -> Path:
     desktop.mkdir(parents=True, exist_ok=True)
     launcher = desktop / "Grok Build.command"
-    body = (
-        "#!/bin/sh\n"
-        f"cd {shlex.quote(str(ROOT))}\n"
-        "npm run dev\n"
-    )
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    body = f"""#!/bin/sh
+set -e
+cd {shlex.quote(str(ROOT))}
+(
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+    if command -v curl >/dev/null 2>&1 && curl -fsS http://127.0.0.1:5173/ >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  {opener} http://localhost:5173/ >/dev/null 2>&1 || true
+) &
+exec npm run dev
+"""
     launcher.write_text(body, encoding="utf-8")
     launcher.chmod(launcher.stat().st_mode | 0o111)
     return launcher

@@ -5,7 +5,7 @@ import {
 } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { basename, delimiter, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { normalizeFsPath, resolveInRoot } from './fs.ts'
@@ -22,7 +22,10 @@ function findOnPath(exe: string): string | null {
   if (!exe) return null
   if ((exe.includes('\\') || exe.includes('/')) && existsSync(exe)) return exe
   const pathEnv = process.env.PATH || ''
-  const exts = (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';').filter(Boolean)
+  const exts =
+    process.platform === 'win32'
+      ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';').filter(Boolean)
+      : []
   const names = [exe]
   if (!/\.[a-z0-9]+$/i.test(exe)) {
     for (const ext of exts) names.push(exe + ext)
@@ -155,7 +158,54 @@ function toWslPath(win: string): string {
   return `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`
 }
 
-export async function detectShells(): Promise<ShellInfo[]> {
+function detectPosixShells(): ShellInfo[] {
+  const login = process.env.SHELL?.trim() || ''
+  const loginPath = login && existsSync(login) ? login : null
+  const candidates: Array<{ id: string; label: string; command: string | null }> = [
+    {
+      id: 'zsh',
+      label: 'zsh',
+      command: findOnPath('zsh') || (loginPath && basename(loginPath) === 'zsh' ? loginPath : null),
+    },
+    {
+      id: 'bash',
+      label: 'bash',
+      command: findOnPath('bash') || (loginPath && basename(loginPath) === 'bash' ? loginPath : null),
+    },
+    {
+      id: 'fish',
+      label: 'fish',
+      command: findOnPath('fish') || (loginPath && basename(loginPath) === 'fish' ? loginPath : null),
+    },
+    {
+      id: 'sh',
+      label: 'sh',
+      command: findOnPath('sh') || (loginPath && basename(loginPath) === 'sh' ? loginPath : null),
+    },
+  ]
+
+  const shells: ShellInfo[] = []
+  const seen = new Set<string>()
+  const add = (id: string, label: string, command: string) => {
+    if (!command || seen.has(id) || !existsSync(command)) return
+    seen.add(id)
+    shells.push({
+      id,
+      label,
+      command,
+      args: ['-i'],
+      available: true,
+    })
+  }
+
+  if (loginPath) add(basename(loginPath), basename(loginPath), loginPath)
+  for (const c of candidates) {
+    if (c.command) add(c.id, c.label, c.command)
+  }
+  return shells
+}
+
+async function detectWindowsShells(): Promise<ShellInfo[]> {
   const pf = process.env['ProgramFiles'] || 'C:\\Program Files'
   const pf86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'
   const local = process.env['LOCALAPPDATA'] || join(homedir(), 'AppData', 'Local')
@@ -209,6 +259,29 @@ export async function detectShells(): Promise<ShellInfo[]> {
     },
   ]
   return shells.filter((s) => s.available)
+}
+
+export async function detectShells(): Promise<ShellInfo[]> {
+  if (process.platform === 'win32') return detectWindowsShells()
+  return detectPosixShells()
+}
+
+export function defaultShellId(
+  shells: ShellInfo[],
+  platform: NodeJS.Platform = process.platform,
+  loginShell = process.env.SHELL || '',
+): string {
+  if (platform === 'win32') {
+    return shells.find((s) => s.id === 'powershell')?.id ?? shells[0]?.id ?? 'powershell'
+  }
+  const loginName = basename(loginShell.trim())
+  return (
+    shells.find((s) => s.id === loginName)?.id ??
+    shells.find((s) => s.id === 'zsh')?.id ??
+    shells.find((s) => s.id === 'bash')?.id ??
+    shells[0]?.id ??
+    'zsh'
+  )
 }
 
 type TermEvent =
@@ -370,17 +443,35 @@ export function streamTerminal(
   })
 }
 
-export function openExternal(target: string): void {
-  const url = target.trim()
-  if (!/^https?:\/\//i.test(url)) {
-    throw new Error('只能打开网页链接')
+export function openCommand(
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (platform === 'win32') {
+    return { command: 'cmd.exe', args: ['/c', 'start', '', target] }
   }
-  const child = spawn('cmd.exe', ['/c', 'start', '', url], {
+  if (platform === 'darwin') {
+    return { command: 'open', args: [target] }
+  }
+  return { command: 'xdg-open', args: [target] }
+}
+
+function spawnDetached(command: string, args: string[]): void {
+  const child = spawn(command, args, {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
   })
   child.unref()
+}
+
+export function openExternal(target: string): void {
+  const url = target.trim()
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error('只能打开网页链接')
+  }
+  const { command, args } = openCommand(url)
+  spawnDetached(command, args)
 }
 
 function absFrom(path: string, cwd = ''): string {
@@ -393,12 +484,8 @@ export function openLocalHtml(path: string, cwd = ''): void {
   const abs = absFrom(path, cwd)
   if (!abs || !existsSync(abs)) throw new Error('文件不存在')
   if (!/\.html?$/i.test(abs)) throw new Error('不是网页文件')
-  const child = spawn('cmd.exe', ['/c', 'start', '', abs], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  })
-  child.unref()
+  const { command, args } = openCommand(abs)
+  spawnDetached(command, args)
 }
 
 export function revealInExplorer(path: string, cwd = ''): void {

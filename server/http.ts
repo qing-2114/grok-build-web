@@ -12,6 +12,7 @@ import {
 import { listDir, readPreview, streamRaw } from './fs.ts'
 import {
   closeTerminal,
+  defaultShellId,
   detectShells,
   interruptTerminal,
   openExternal,
@@ -452,9 +453,11 @@ async function handle(
 
   if (match(method, path, 'POST', '/api/terminal')) {
     const body = await readJson(req)
+    const shells = await detectShells()
+    const requested = String(body.shellId ?? '').trim()
     const created = await startTerminal(
       String(body.cwd ?? ''),
-      String(body.shellId ?? 'powershell'),
+      requested || defaultShellId(shells),
     )
     sendJson(res, 200, created)
     return

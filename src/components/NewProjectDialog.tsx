@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { IconClose, IconFolder } from '../icons'
 import { folderNameFromPath, pickLocalFolder } from '../lib/folder'
+import { isWindowsPlatform } from '../lib/platform'
 import { useWorkspace } from '../workspace'
 
 export function NewProjectDialog() {
@@ -126,7 +127,7 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
                 setPath(v)
                 if (!name) setName(folderNameFromPath(v))
               }}
-              placeholder="例如 F:\your-project"
+              placeholder={isWindowsPlatform() ? '例如 F:\\your-project' : '例如 /Users/you/your-project'}
               autoComplete="off"
               spellCheck={false}
             />

@@ -7,23 +7,22 @@ import {
 } from '../icons'
 import { RIGHT_RAIL_WIDTH_DEFAULT } from '../lib/layout'
 import { fileName } from '../lib/paths'
-import type { RightPanel, RightTab } from '../types'
+import { modKeyLabel } from '../lib/platform'
+import type { RightTab } from '../types'
 import { useWorkspace } from '../workspace'
 import { FileExplorer } from './FileExplorer'
 import { ResizeHandle } from './ResizeHandle'
 import { ReviewPane } from './ReviewPane'
 import { TerminalPane } from './TerminalPane'
 
-const SHORTCUTS: {
-  id: Exclude<RightPanel, 'idle'>
-  label: string
-  keys: string
-  icon: typeof IconDiff
-}[] = [
-  { id: 'review', label: '审查', keys: 'Ctrl+Shift+G', icon: IconDiff },
-  { id: 'terminal', label: '终端', keys: 'Ctrl+`', icon: IconTerminal },
-  { id: 'files', label: '文件', keys: 'Ctrl+P', icon: IconFileTree },
-]
+function shortcuts() {
+  const mod = modKeyLabel()
+  return [
+    { id: 'review' as const, label: '审查', keys: `${mod}+Shift+G`, icon: IconDiff },
+    { id: 'terminal' as const, label: '终端', keys: `${mod}+\``, icon: IconTerminal },
+    { id: 'files' as const, label: '文件', keys: `${mod}+P`, icon: IconFileTree },
+  ]
+}
 
 function tabLabel(tab: RightTab): string {
   if (tab.kind === 'review') return '审查'
@@ -128,7 +127,7 @@ export function RightRail() {
         {!active ? (
           <div className="right-empty">
             <ul>
-              {SHORTCUTS.map((s) => (
+              {shortcuts().map((s) => (
                 <li key={s.id}>
                   <button
                     type="button"

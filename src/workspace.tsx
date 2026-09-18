@@ -144,6 +144,7 @@ type Action =
   | { type: 'set-workspace-project'; id: string | null }
   | { type: 'update-project'; id: string; name: string; path: string }
   | { type: 'delete-project-chats'; id: string }
+  | { type: 'delete-project'; id: string; deleteChats: boolean }
   | { type: 'set-branch'; branch: string }
   | { type: 'set-context-usage'; usage: ContextUsage | null }
   | { type: 'patch-context-used'; sessionId: string; used: number }
@@ -856,6 +857,82 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         titleOverrides: overrides,
       }
     }
+    case 'delete-project': {
+      const id = action.id
+      if (!state.projects.some((p) => p.id === id)) return state
+      const removedIds = new Set(
+        state.sessions.filter((s) => s.projectId === id).map((s) => s.id),
+      )
+      const overrides = { ...state.titleOverrides }
+      let sessions: Session[]
+      let thinkingIds = state.thinkingIds
+      let unreadIds = state.unreadIds
+      let outgoingQueue = state.outgoingQueue
+      let contextUsage = state.contextUsage
+      let hydratingId = state.hydratingId
+      if (action.deleteChats) {
+        sessions = state.sessions.filter((s) => !removedIds.has(s.id))
+        for (const sid of removedIds) delete overrides[sid]
+        thinkingIds = thinkingIds.filter((sid) => !removedIds.has(sid))
+        unreadIds = unreadIds.filter((sid) => !removedIds.has(sid))
+        outgoingQueue = outgoingQueue.filter((q) => !removedIds.has(q.sessionId))
+        if (contextUsage && removedIds.has(contextUsage.sessionId)) {
+          contextUsage = null
+        }
+        if (hydratingId && removedIds.has(hydratingId)) hydratingId = null
+      } else {
+        sessions = state.sessions
+          .filter(
+            (s) =>
+              s.projectId !== id ||
+              s.source === 'grok' ||
+              s.messages.length > 0,
+          )
+          .map((s) => (s.projectId === id ? { ...s, projectId: null } : s))
+      }
+      const projects = state.projects.filter((p) => p.id !== id)
+      const activeProjectId =
+        state.activeProjectId === id ? null : state.activeProjectId
+      const expandedProjectId =
+        state.expandedProjectId === id ? null : state.expandedProjectId
+      const editingThis = state.editingProjectId === id
+      const keepActive = sessions.some((s) => s.id === state.activeSessionId)
+      if (keepActive) {
+        return {
+          ...state,
+          projects,
+          sessions,
+          titleOverrides: overrides,
+          thinkingIds,
+          unreadIds,
+          outgoingQueue,
+          contextUsage,
+          hydratingId,
+          activeProjectId,
+          expandedProjectId,
+          editingProjectId: editingThis ? null : state.editingProjectId,
+          projectDialogOpen: editingThis ? false : state.projectDialogOpen,
+        }
+      }
+      const draft = makeDraft(null, state.homeDir)
+      return {
+        ...state,
+        projects,
+        sessions: [draft, ...dropEmptyDrafts(sessions)],
+        activeSessionId: draft.id,
+        titleOverrides: overrides,
+        thinkingIds,
+        unreadIds,
+        outgoingQueue,
+        contextUsage: null,
+        hydratingId,
+        activeProjectId: null,
+        expandedProjectId,
+        editingProjectId: editingThis ? null : state.editingProjectId,
+        projectDialogOpen: editingThis ? false : state.projectDialogOpen,
+        ...dropFileTabs(state),
+      }
+    }
     case 'set-workspace-project': {
       const id = action.id
       const project = state.projects.find((p) => p.id === id)
@@ -1065,6 +1142,7 @@ type WorkspaceApi = WorkspaceState & {
   addProject: (input: { name: string; path: string; branch?: string }) => void
   updateProject: (input: { id: string; name: string; path: string }) => void
   deleteProjectChats: (id: string) => void
+  deleteProject: (id: string, deleteChats?: boolean) => void
   setWorkspaceProject: (id: string | null) => void
   setBranch: (branch: string) => void
   deleteSession: (id: string) => void
@@ -1585,6 +1663,30 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         )
         dispatch({ type: 'delete-project-chats', id })
         notify('已删除该项目下的会话', 'success')
+      })()
+    },
+    deleteProject: (id, deleteChats = true) => {
+      void (async () => {
+        if (deleteChats) {
+          const targets = stateRef.current.sessions.filter(
+            (s) => s.projectId === id,
+          )
+          await Promise.all(
+            targets.map(async (s) => {
+              if (!isGrokSessionId(s.id)) return
+              try {
+                await deleteRemoteSession(s.id)
+              } catch {
+                // keep going so the project can still be removed
+              }
+            }),
+          )
+        }
+        dispatch({ type: 'delete-project', id, deleteChats })
+        notify(
+          deleteChats ? '已删除项目及其会话' : '已删除项目',
+          'success',
+        )
       })()
     },
     setWorkspaceProject: (id) => dispatch({ type: 'set-workspace-project', id }),

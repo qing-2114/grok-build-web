@@ -2136,6 +2136,10 @@ textarea {
   padding: 24px;
 }
 
+.dialog-root.is-confirm {
+  z-index: 240;
+}
+
 .scrim {
   position: absolute;
   inset: 0;
@@ -2151,6 +2155,11 @@ textarea {
   border-radius: 18px;
   padding: 20px 20px 16px;
   box-shadow: var(--shadow);
+}
+
+.dialog.is-confirm {
+  width: min(360px, 100%);
+  padding: 18px 18px 14px;
 }
 
 .dialog-head {
@@ -2251,6 +2260,36 @@ textarea {
 
 .btn-solid:hover {
   filter: brightness(1.05);
+}
+
+.btn-solid.is-danger {
+  background: var(--danger);
+  color: #1a1010;
+}
+
+.dialog-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 4px;
+  padding: 10px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--void);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.dialog-check:hover {
+  border-color: var(--line-strong);
+}
+
+.dialog-check input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  accent-color: var(--ink);
 }
 
 .btn-solid:disabled,

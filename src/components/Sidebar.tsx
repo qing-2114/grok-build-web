@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import {
   IconClose,
   IconDots,
@@ -108,6 +109,142 @@ function SessionRow({
   )
 }
 
+function ProjectMenu({
+  project,
+  close,
+  onDeleteProject,
+}: {
+  project: Project
+  close: () => void
+  onDeleteProject: () => void
+}) {
+  const { setProjectDialog, deleteProjectChats } = useWorkspace()
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          close()
+          setProjectDialog(true, project.id)
+        }}
+      >
+        <IconPencil />
+        <span>编辑项目</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="is-danger"
+        onClick={() => {
+          close()
+          deleteProjectChats(project.id)
+        }}
+      >
+        <IconTrash />
+        <span>删除所有聊天</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="is-danger"
+        onClick={() => {
+          close()
+          onDeleteProject()
+        }}
+      >
+        <IconTrash />
+        <span>删除项目</span>
+      </button>
+    </>
+  )
+}
+
+function DeleteProjectDialog({
+  name,
+  chatCount,
+  onClose,
+  onConfirm,
+}: {
+  name: string
+  chatCount: number
+  onClose: () => void
+  onConfirm: (deleteChats: boolean) => void
+}) {
+  const [deleteChats, setDeleteChats] = useState(true)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    cancelRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return createPortal(
+    <div className="dialog-root is-confirm" role="presentation">
+      <button
+        type="button"
+        className="scrim"
+        aria-label="取消"
+        onClick={onClose}
+      />
+      <div
+        className="dialog is-confirm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-project-title"
+      >
+        <header className="dialog-head">
+          <h2 id="delete-project-title">删除项目</h2>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="关闭"
+            onClick={onClose}
+          >
+            <IconClose />
+          </button>
+        </header>
+        <p className="dialog-lead">
+          确认删除「{name}」？此操作无法撤销。
+        </p>
+        <label className="dialog-check">
+          <input
+            type="checkbox"
+            checked={deleteChats}
+            onChange={(e) => setDeleteChats(e.target.checked)}
+          />
+          <span>
+            同时删除该项目下所有会话
+            {chatCount > 0 ? `（${chatCount}）` : ''}
+          </span>
+        </label>
+        <footer className="dialog-foot">
+          <button
+            ref={cancelRef}
+            type="button"
+            className="btn-ghost"
+            onClick={onClose}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            className="btn-solid is-danger"
+            onClick={() => onConfirm(deleteChats)}
+          >
+            删除项目
+          </button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 export function Sidebar() {
   const {
     filteredProjects,
@@ -124,7 +261,7 @@ export function Sidebar() {
     selectProject,
     selectSession,
     deleteSession,
-    deleteProjectChats,
+    deleteProject,
     renameSession,
     setProjectDialog,
     toggleSidebar,
@@ -141,6 +278,11 @@ export function Sidebar() {
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(
     null,
   )
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string
+    name: string
+    chatCount: number
+  } | null>(null)
 
   useEffect(() => {
     if (searchOpen) searchRef.current?.focus()
@@ -283,6 +425,13 @@ export function Sidebar() {
                         ? 'project-head is-active'
                         : 'project-head'
                     }
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      const btn = e.currentTarget.querySelector<HTMLButtonElement>(
+                        'button[aria-label$="更多"]',
+                      )
+                      if (btn && !btn.classList.contains('is-open')) btn.click()
+                    }}
                   >
                     <button
                       type="button"
@@ -316,31 +465,17 @@ export function Sidebar() {
                         )}
                       >
                         {({ close }) => (
-                          <>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                close()
-                                setProjectDialog(true, project.id)
-                              }}
-                            >
-                              <IconPencil />
-                              <span>编辑项目</span>
-                            </button>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              className="is-danger"
-                              onClick={() => {
-                                close()
-                                deleteProjectChats(project.id)
-                              }}
-                            >
-                              <IconTrash />
-                              <span>删除所有聊天</span>
-                            </button>
-                          </>
+                          <ProjectMenu
+                            project={project}
+                            close={close}
+                            onDeleteProject={() =>
+                              setPendingDelete({
+                                id: project.id,
+                                name: project.name,
+                                chatCount: chats.length,
+                              })
+                            }
+                          />
                         )}
                       </Popover>
                       <button
@@ -449,6 +584,18 @@ export function Sidebar() {
           value={sidebarWidth}
           fallback={SIDEBAR_WIDTH_DEFAULT}
           onChange={setSidebarWidth}
+        />
+      ) : null}
+      {pendingDelete ? (
+        <DeleteProjectDialog
+          name={pendingDelete.name}
+          chatCount={pendingDelete.chatCount}
+          onClose={() => setPendingDelete(null)}
+          onConfirm={(deleteChats) => {
+            const id = pendingDelete.id
+            setPendingDelete(null)
+            deleteProject(id, deleteChats)
+          }}
         />
       ) : null}
     </aside>

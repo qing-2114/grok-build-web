@@ -1,7 +1,7 @@
 # Starts the local Grok Build web console and opens the browser.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-$Url = 'http://localhost:5173/'
+$Url = 'http://127.0.0.1:5173/'
 $Port = 5173
 
 function Show-Notice([string]$Text, [int]$Icon = 64) {

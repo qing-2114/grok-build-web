@@ -435,6 +435,28 @@ textarea {
   padding: 2px 0 6px 18px;
 }
 
+.session-more {
+  display: block;
+  width: min(100%, 18rem);
+  max-width: min(100%, 18rem);
+  margin: 0;
+  padding: 4px 10px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink-mute);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-more:hover,
+.session-more:focus-visible {
+  background: var(--hover);
+  color: var(--ink-dim);
+}
+
 .session-row {
   position: relative;
   display: flex;
@@ -1061,6 +1083,14 @@ textarea {
   place-items: center;
   background: var(--raised);
   color: var(--ink);
+  overflow: hidden;
+}
+
+.who-mark img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  mix-blend-mode: lighten;
 }
 
 .prose {

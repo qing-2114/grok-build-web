@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
-import type { GrokAcp } from './acp.ts'
+import { PROMPT_TIMEOUT_MS, type GrokAcp } from './acp.ts'
+import { assertSafeSessionId, HttpError } from './guard.ts'
 import {
   gitChanges,
   gitCheckout,
@@ -223,7 +224,7 @@ export function createRouter(acp: GrokAcp) {
         res.end()
         return
       }
-      sendJson(res, 500, {
+      sendJson(res, err instanceof HttpError ? err.status : 500, {
         error: err instanceof Error ? err.message : String(err),
       })
     }
@@ -289,7 +290,15 @@ async function handle(
 
   if (match(method, path, 'POST', '/api/git/checkout')) {
     const body = await readJson(req)
-    await gitCheckout(String(body.path ?? ''), String(body.branch ?? ''))
+    try {
+      await gitCheckout(String(body.path ?? ''), String(body.branch ?? ''))
+    } catch (err) {
+      // Bad branch name or a refused checkout is the caller's fault, not a server fault.
+      sendJson(res, 400, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
     const info = await gitInfo(String(body.path ?? ''))
     sendJson(res, 200, info)
     return
@@ -465,36 +474,37 @@ async function handle(
 
   const termStream = match(method, path, 'GET', '/api/terminal/:id/stream')
   if (termStream) {
-    await streamTerminal(termStream.id, req, res)
+    await streamTerminal(assertSafeSessionId(termStream.id), req, res)
     return
   }
 
   const termInput = match(method, path, 'POST', '/api/terminal/:id/input')
   if (termInput) {
     const body = await readJson(req)
-    writeTerminal(termInput.id, String(body.text ?? ''))
+    writeTerminal(assertSafeSessionId(termInput.id), String(body.text ?? ''))
     sendJson(res, 200, { ok: true })
     return
   }
 
   const termSig = match(method, path, 'POST', '/api/terminal/:id/signal')
   if (termSig) {
-    interruptTerminal(termSig.id)
+    interruptTerminal(assertSafeSessionId(termSig.id))
     sendJson(res, 200, { ok: true })
     return
   }
 
   const termDel = match(method, path, 'DELETE', '/api/terminal/:id')
   if (termDel) {
-    closeTerminal(termDel.id)
+    closeTerminal(assertSafeSessionId(termDel.id))
     sendJson(res, 200, { ok: true })
     return
   }
 
   const contextGet = match(method, path, 'GET', '/api/sessions/:id/context')
   if (contextGet) {
+    const sessionId = assertSafeSessionId(contextGet.id)
     const cwd = normalizePath(url.searchParams.get('cwd') || '') || homedir()
-    sendJson(res, 200, await contextFromDisk(cwd, contextGet.id))
+    sendJson(res, 200, await contextFromDisk(cwd, sessionId))
     return
   }
 
@@ -568,7 +578,7 @@ async function handle(
   const load = match(method, path, 'POST', '/api/sessions/:id/load')
   if (load) {
     const body = await readJson(req)
-    const sessionId = load.id
+    const sessionId = assertSafeSessionId(load.id)
     const cwd = normalizePath(String(body.cwd ?? '')) || homedir()
     const builder = new TranscriptBuilder()
     const onUpdate = (params: { sessionId?: string; update?: unknown }) => {
@@ -603,8 +613,9 @@ async function handle(
 
   const titleGet = match(method, path, 'GET', '/api/sessions/:id/title')
   if (titleGet) {
+    const sessionId = assertSafeSessionId(titleGet.id)
     const cwd = normalizePath(url.searchParams.get('cwd') || '') || homedir()
-    const title = await generatedTitleFromDisk(cwd, titleGet.id)
+    const title = await generatedTitleFromDisk(cwd, sessionId)
     sendJson(res, 200, { title })
     return
   }
@@ -612,7 +623,7 @@ async function handle(
   const prompt = match(method, path, 'POST', '/api/sessions/:id/prompt')
   if (prompt) {
     const body = await readJson(req)
-    const sessionId = prompt.id
+    const sessionId = assertSafeSessionId(prompt.id)
     const blocks = buildPrompt(body)
     res.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -653,6 +664,7 @@ async function handle(
       const result = await acp.request<{ stopReason?: string }>(
         'session/prompt',
         { sessionId, prompt: blocks },
+        PROMPT_TIMEOUT_MS,
       )
       write({ type: 'done', stopReason: result.stopReason || 'end_turn' })
     } catch (err) {
@@ -663,6 +675,7 @@ async function handle(
     } finally {
       acp.off('update', onUpdate)
       acp.off('permission', onPerm)
+      acp.cancelPermissions(sessionId)
       res.end()
     }
     return
@@ -670,24 +683,27 @@ async function handle(
 
   const cancel = match(method, path, 'POST', '/api/sessions/:id/cancel')
   if (cancel) {
-    await acp.request('session/cancel', { sessionId: cancel.id }).catch(() => undefined)
+    const sessionId = assertSafeSessionId(cancel.id)
+    await acp.request('session/cancel', { sessionId }).catch(() => undefined)
+    acp.cancelPermissions(sessionId)
     sendJson(res, 200, { ok: true })
     return
   }
 
   const config = match(method, path, 'POST', '/api/sessions/:id/config')
   if (config) {
+    const sessionId = assertSafeSessionId(config.id)
     const body = await readJson(req)
     if (typeof body.model === 'string' && body.model) {
       await acp.request('session/set_config_option', {
-        sessionId: config.id,
+        sessionId,
         configId: 'model',
         value: body.model,
       })
     }
     if (typeof body.effort === 'string' && body.effort) {
       await acp.request('session/set_config_option', {
-        sessionId: config.id,
+        sessionId,
         configId: 'reasoning_effort',
         value: body.effort,
       })
@@ -698,8 +714,10 @@ async function handle(
 
   const del = match(method, path, 'DELETE', '/api/sessions/:id')
   if (del) {
-    await acp.request('session/close', { sessionId: del.id }).catch(() => undefined)
-    await deleteOnDisk(del.id)
+    const sessionId = assertSafeSessionId(del.id)
+    await acp.request('session/close', { sessionId }).catch(() => undefined)
+    acp.cancelPermissions(sessionId)
+    await deleteOnDisk(sessionId)
     sendJson(res, 200, { ok: true })
     return
   }
@@ -707,9 +725,19 @@ async function handle(
   if (match(method, path, 'POST', '/api/permission')) {
     const body = await readJson(req)
     const rpcId = Number(body.requestId)
-    const optionId =
-      typeof body.optionId === 'string' ? body.optionId : null
-    const ok = acp.resolvePermission(rpcId, optionId)
+    const optionId = body.optionId
+    if (!Number.isFinite(rpcId)) {
+      sendJson(res, 400, { error: '权限请求编号无效' })
+      return
+    }
+    if (optionId != null && (typeof optionId !== 'string' || !optionId)) {
+      sendJson(res, 400, { error: '权限选项无效' })
+      return
+    }
+    const ok = acp.resolvePermission(
+      rpcId,
+      typeof optionId === 'string' ? optionId : null,
+    )
     sendJson(res, 200, { ok })
     return
   }

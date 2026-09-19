@@ -25,7 +25,7 @@ py -3 grok-build-web-install.py
 3. 在本仓库执行 `npm install`
 4. 在桌面创建「Grok Build」快捷方式（Windows：`.lnk` 指向 `scripts/open-grok-build.ps1`；macOS / Linux：`Grok Build.command`）
 
-完成后双击桌面快捷方式即可启动操作台（`http://localhost:5173/`）。自定义模型可在设置 → **模型部署** 里填请求地址和 API Key，不必先 `grok login`。
+完成后双击桌面快捷方式即可启动操作台（`http://127.0.0.1:5173/`）。自定义模型可在设置 → **模型部署** 里填请求地址和 API Key，不必先 `grok login`。
 
 ### 交给智能体（100 字以内）
 
@@ -61,7 +61,7 @@ npm install
 npm run dev
 ```
 
-浏览器打开终端里的地址（默认 `http://localhost:5173/`）。顶栏应显示 **已连接** 和 Grok Build 版本号。
+浏览器打开终端里的地址（默认 `http://127.0.0.1:5173/`）。顶栏应显示 **已连接** 和 Grok Build 版本号。
 
 公开仓库首次打开会看到占位项目 `example1` / `example2`。点 **新建项目** 换成你自己的文件夹，或删掉这两个例子。
 
@@ -72,7 +72,23 @@ npm run build
 npm run preview
 ```
 
-预览同样会挂 ACP 桥，不要把端口暴露到公网。这是给本机 `127.0.0.1` 用的操作台。
+预览同样会挂 ACP 桥，只给本机用，不要把端口暴露到公网。
+
+### 网络访问与安全
+
+开发服务器和预览服务器默认只绑回环地址 `127.0.0.1`，并且 `/api/*` 前有一层守卫，只接受本机同源请求：
+
+- 请求的 `Host` 必须是 `localhost` / `127.0.0.1` / `::1`（或下面显式放行的主机），否则返回 403
+- 带 `Origin` 的请求必须与 `Host` 完全同源（含端口），`Origin: null` 与跨源页面一律 403
+- 非 GET/HEAD 且带请求体的请求，`Content-Type` 必须是 `application/json`，否则返回 415
+
+确需从别的机器访问（不建议）时用环境变量显式放行：
+
+```bash
+GROK_WEB_HOST=0.0.0.0 GROK_WEB_ALLOWED_HOSTS=192.168.1.50 npm run dev
+```
+
+`GROK_WEB_HOST` 是监听地址（默认 `127.0.0.1`），`GROK_WEB_ALLOWED_HOSTS` 是逗号分隔的额外放行主机名（可带端口）。放行后局域网内任何设备都能读写本机文件、读取 `~/.grok/config.toml` 里的明文 API Key，请自行判断风险。
 
 ### 桌面快捷方式
 

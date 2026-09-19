@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import {
   IconBox,
   IconCheck,
@@ -68,9 +68,14 @@ function nextCatalogId(
   return `${base}-${Date.now().toString(36)}`
 }
 
-export function ModelDeploy() {
+export function ModelDeploy({
+  dirtyRef,
+}: {
+  dirtyRef?: RefObject<boolean>
+}) {
   const { notify, refreshAgent } = useWorkspace()
   const [providers, setProviders] = useState<DeployProvider[]>([])
+  const [baseline, setBaseline] = useState('[]')
   const [persisted, setPersisted] = useState<Set<string>>(() => new Set())
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -99,6 +104,29 @@ export function ModelDeploy() {
   const backendMeta =
     API_BACKENDS.find((b) => b.id === selected?.apiBackend) ?? API_BACKENDS[0]
 
+  // 页面上的修改都在 providers 里，只有保存才写盘。和上次落盘的快照比一下就知道脏没脏。
+  const dirty = useMemo(
+    () => JSON.stringify(providers) !== baseline,
+    [providers, baseline],
+  )
+  useEffect(() => {
+    if (dirtyRef) dirtyRef.current = dirty
+  }, [dirty, dirtyRef])
+  useEffect(() => {
+    return () => {
+      if (dirtyRef) dirtyRef.current = false
+    }
+  }, [dirtyRef])
+  useEffect(() => {
+    if (!dirty) return
+    const onLeave = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onLeave)
+    return () => window.removeEventListener('beforeunload', onLeave)
+  }, [dirty])
+
   function resetTransient() {
     catalogGen.current += 1
     testGen.current += 1
@@ -123,6 +151,7 @@ export function ModelDeploy() {
       .then((list) => {
         if (cancelled) return
         setProviders(list)
+        setBaseline(JSON.stringify(list))
         setPersisted(new Set(list.map((p) => p.id)))
         setSelectedId(list[0]?.id ?? null)
         setLoadError(null)
@@ -155,6 +184,14 @@ export function ModelDeploy() {
       setTesting(false)
       setModelBusy({})
       setModelTest({})
+      // 改了地址 / 密钥 / 协议，之前拉到的模型目录就属于旧端点，作废，
+      // 否则会把旧列表里的模型加到新地址下面。
+      catalogGen.current += 1
+      setCatalog([])
+      setCatalogSel(new Set())
+      setCatalogError(null)
+      setCatalogBusy(false)
+      setCatalogOpen(false)
     }
   }
 
@@ -185,6 +222,7 @@ export function ModelDeploy() {
     try {
       const result = await saveDeployment(selected)
       setProviders(result.providers)
+      setBaseline(JSON.stringify(result.providers))
       setPersisted(new Set(result.providers.map((p) => p.id)))
       const still = result.providers.find((p) => p.id === selected.id)
       setSelectedId(still?.id ?? result.providers[0]?.id ?? null)
@@ -208,6 +246,7 @@ export function ModelDeploy() {
     if (!persisted.has(selected.id)) {
       const next = providers.filter((p) => p.id !== selected.id)
       setProviders(next)
+      setBaseline(JSON.stringify(next))
       setSelectedId(next[0]?.id ?? null)
       return
     }
@@ -215,6 +254,7 @@ export function ModelDeploy() {
     try {
       const result = await deleteDeployment(selected.id)
       setProviders(result.providers)
+      setBaseline(JSON.stringify(result.providers))
       setPersisted(new Set(result.providers.map((p) => p.id)))
       setSelectedId(result.providers[0]?.id ?? null)
       await refreshAgent()
@@ -918,6 +958,7 @@ export function ModelDeploy() {
 
                 <div className="settings-actions">
                   <p className="deploy-hint">
+                    {dirty ? '有未保存的修改。' : ''}
                     保存会写入 ~/.grok/config.toml 并重载本机 Grok agent，进行中的生成会中断。
                   </p>
                   <button

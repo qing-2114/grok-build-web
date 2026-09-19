@@ -124,6 +124,13 @@ export function PathLink({
                 <button
                   type="button"
                   role="menuitem"
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setMenu(null)
+                    onOpenUrl?.(href)
+                  }}
                   onClick={() => {
                     setMenu(null)
                     onOpenUrl?.(href)
@@ -137,6 +144,13 @@ export function PathLink({
                 <button
                   type="button"
                   role="menuitem"
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setMenu(null)
+                    onReveal?.(href)
+                  }}
                   onClick={() => {
                     setMenu(null)
                     onReveal?.(href)

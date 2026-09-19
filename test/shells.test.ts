@@ -1,20 +1,57 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { defaultShellId, detectShells, openCommand } from '../server/shells.ts'
+import {
+  defaultShellId,
+  detectShells,
+  externalLaunchArgs,
+  localHtmlLaunchArgs,
+} from '../server/shells.ts'
 
-test('openCommand uses the host opener on each platform', () => {
-  assert.deepEqual(openCommand('https://example.com', 'darwin'), {
+test('externalLaunchArgs uses the host opener on each platform', () => {
+  assert.deepEqual(externalLaunchArgs('https://example.com', 'darwin'), {
     command: 'open',
     args: ['https://example.com'],
   })
-  assert.deepEqual(openCommand('https://example.com', 'linux'), {
+  assert.deepEqual(externalLaunchArgs('https://example.com', 'linux'), {
     command: 'xdg-open',
     args: ['https://example.com'],
   })
-  assert.deepEqual(openCommand('https://example.com', 'win32'), {
-    command: 'cmd.exe',
-    args: ['/c', 'start', '', 'https://example.com'],
+  // Windows 走 rundll32（普通可执行文件），不再经过 cmd.exe：
+  // `cmd /c start "" <url>` 会让 cmd 再解析一次命令行，`&` 既能截断链接，
+  // 也能被注入成命令执行。
+  assert.deepEqual(externalLaunchArgs('https://example.com', 'win32'), {
+    command: 'rundll32.exe',
+    args: ['url.dll,FileProtocolHandler', 'https://example.com'],
   })
+})
+
+test('externalLaunchArgs never routes through a shell', () => {
+  for (const platform of ['win32', 'darwin', 'linux'] as const) {
+    const spec = externalLaunchArgs('https://example.com', platform)
+    for (const shell of ['cmd.exe', 'sh', 'bash', 'zsh', 'powershell.exe']) {
+      assert.notEqual(spec.command, shell)
+    }
+  }
+})
+
+test('externalLaunchArgs keeps & intact as a single argument', () => {
+  const spec = externalLaunchArgs('https://www.youtube.com/watch?v=X&t=30', 'win32')
+  assert.equal(spec.args.length, 2)
+  assert.equal(spec.args[1], 'https://www.youtube.com/watch?v=X&t=30')
+})
+
+test('externalLaunchArgs rejects quote, control chars and non-http schemes', () => {
+  assert.throws(() => externalLaunchArgs('https://a/"&calc&"', 'win32'))
+  assert.throws(() => externalLaunchArgs('https://a/\n calc', 'win32'))
+  assert.throws(() => externalLaunchArgs('file:///C:/Windows/System32/calc.exe', 'win32'))
+})
+
+test('localHtmlLaunchArgs accepts .html and rejects other extensions', () => {
+  assert.deepEqual(localHtmlLaunchArgs('C:\\tmp\\a&b.html', 'win32'), {
+    command: 'rundll32.exe',
+    args: ['url.dll,FileProtocolHandler', 'C:\\tmp\\a&b.html'],
+  })
+  assert.throws(() => localHtmlLaunchArgs('C:\\tmp\\a.exe', 'win32'))
 })
 
 test('defaultShellId prefers the login shell outside Windows', () => {

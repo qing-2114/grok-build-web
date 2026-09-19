@@ -6,6 +6,7 @@ import {
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { normalizeFsPath, resolveInRoot } from './fs.ts'
@@ -301,9 +302,37 @@ type TermRec = {
 const byId = new Map<string, TermRec>()
 const byKey = new Map<string, string>()
 const BUFFER_MAX = 200_000
+// 已退出的终端要留着回放（浏览器 EventSource 断线会自动重连同一个 id），
+// 但不能无限留着：每个记录最多背着 BUFFER_MAX 字符和一组监听器。
+const MAX_EXITED_RECORDS = 8
+// byKey 只保证同一个 (cwd, shellId) 复用同一个终端，不同目录仍可无限开。
+const MAX_LIVE_TERMINALS = 16
 
 function termKey(cwd: string, shellId: string): string {
   return `${normalizeFsPath(cwd).toLowerCase()}|${shellId}`
+}
+
+function liveTerminalCount(): number {
+  let count = 0
+  for (const rec of byId.values()) {
+    if (rec.exitCode == null) count += 1
+  }
+  return count
+}
+
+// Map 保持插入顺序：最先插入的就是最久没被用过的。正在运行的终端永不淘汰。
+function evictExitedRecords(): void {
+  let exited = 0
+  for (const rec of byId.values()) {
+    if (rec.exitCode != null) exited += 1
+  }
+  if (exited <= MAX_EXITED_RECORDS) return
+  for (const [id, rec] of byId) {
+    if (exited <= MAX_EXITED_RECORDS) break
+    if (rec.exitCode == null) continue
+    byId.delete(id)
+    exited -= 1
+  }
 }
 
 function appendBuf(rec: TermRec, text: string): void {
@@ -330,6 +359,11 @@ export async function startTerminal(
       shellId: existing.shellId,
       reused: true,
     }
+  }
+
+  evictExitedRecords()
+  if (liveTerminalCount() >= MAX_LIVE_TERMINALS) {
+    throw new Error(`同时运行的终端最多 ${MAX_LIVE_TERMINALS} 个，请先关闭一些终端`)
   }
 
   const shells = await detectShells()
@@ -373,7 +407,9 @@ export async function startTerminal(
   proc.on('close', (code) => {
     rec.exitCode = code ?? 0
     emit(rec, { type: 'exit', code: rec.exitCode })
+    // byKey 释放（同目录可以再开），byId 留作重连回放，由 LRU 兜底淘汰。
     if (byKey.get(key) === id) byKey.delete(key)
+    evictExitedRecords()
   })
 
   const banner = `当前目录 ${dir}\r\nShell: ${shell.label}\r\n\r\n`
@@ -421,6 +457,9 @@ export function streamTerminal(
       resolvePromise()
       return
     }
+    // 重新连接算一次使用：挪到 Map 末尾，淘汰时最后才轮到它。
+    byId.delete(id)
+    byId.set(id, rec)
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-store',
@@ -443,21 +482,69 @@ export function streamTerminal(
   })
 }
 
-export function openCommand(
-  target: string,
-  platform: NodeJS.Platform = process.platform,
-): { command: string; args: string[] } {
+export type LaunchSpec = {
+  command: string
+  args: string[]
+}
+
+const MAX_LAUNCH_TARGET = 4096
+
+function hasControlChars(value: string): boolean {
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
+// 目标里的引号和控制字符一律拒绝（它们能改变命令行解析）；`&` `?` `=` `%`
+// `#` `+` 都是正常 URL 字符，必须放行，否则带 `&` 的链接又会打不开。
+function assertLaunchTarget(raw: string, label: string): string {
+  // 控制字符按原文判断（trim 会把行尾的 \n 吃掉，那样就检查不到了）。
+  if (hasControlChars(raw) || raw.includes('"')) {
+    throw new Error(`${label}包含非法字符`)
+  }
+  const target = raw.trim()
+  if (!target) throw new Error(`${label}为空`)
+  if (target.length > MAX_LAUNCH_TARGET) throw new Error(`${label}过长`)
+  return target
+}
+
+// 只返回一个可执行文件和参数数组，绝不拼命令行字符串。
+// Windows 走 rundll32.exe（普通 exe，CreateProcess 不解析 `&` 等元字符）；
+// 之前用 `cmd.exe /c start "" <url>` 会被 cmd 再解析一次，`&` 既能截断链接，
+// 也能被注入成命令执行。
+function launchSpec(target: string, platform: NodeJS.Platform): LaunchSpec {
   if (platform === 'win32') {
-    return { command: 'cmd.exe', args: ['/c', 'start', '', target] }
+    return {
+      command: 'rundll32.exe',
+      args: ['url.dll,FileProtocolHandler', target],
+    }
   }
-  if (platform === 'darwin') {
-    return { command: 'open', args: [target] }
-  }
+  if (platform === 'darwin') return { command: 'open', args: [target] }
   return { command: 'xdg-open', args: [target] }
 }
 
-function spawnDetached(command: string, args: string[]): void {
-  const child = spawn(command, args, {
+export function externalLaunchArgs(
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+): LaunchSpec {
+  const url = assertLaunchTarget(target, '链接')
+  if (!/^https?:\/\//i.test(url)) throw new Error('只能打开网页链接')
+  return launchSpec(url, platform)
+}
+
+export function localHtmlLaunchArgs(
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+): LaunchSpec {
+  const abs = assertLaunchTarget(target, '路径')
+  if (!/\.html?$/i.test(abs)) throw new Error('不是网页文件')
+  return launchSpec(abs, platform)
+}
+
+function launchDetached(spec: LaunchSpec): void {
+  const child = spawn(spec.command, spec.args, {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
@@ -466,12 +553,7 @@ function spawnDetached(command: string, args: string[]): void {
 }
 
 export function openExternal(target: string): void {
-  const url = target.trim()
-  if (!/^https?:\/\//i.test(url)) {
-    throw new Error('只能打开网页链接')
-  }
-  const { command, args } = openCommand(url)
-  spawnDetached(command, args)
+  launchDetached(externalLaunchArgs(target))
 }
 
 function absFrom(path: string, cwd = ''): string {
@@ -483,9 +565,38 @@ function absFrom(path: string, cwd = ''): string {
 export function openLocalHtml(path: string, cwd = ''): void {
   const abs = absFrom(path, cwd)
   if (!abs || !existsSync(abs)) throw new Error('文件不存在')
-  if (!/\.html?$/i.test(abs)) throw new Error('不是网页文件')
-  const { command, args } = openCommand(abs)
-  spawnDetached(command, args)
+  launchDetached(localHtmlLaunchArgs(abs))
+}
+
+function revealInExplorerWin(target: string): void {
+  const safe = target.replace(/"/g, '')
+  // Open Explorer from this process. A hidden PowerShell host would start
+  // Explorer hidden too, which looks like "nothing happened".
+  spawn('explorer.exe', [`/select,"${safe}"`], {
+    detached: true,
+    stdio: 'ignore',
+    windowsVerbatimArguments: true,
+  }).unref()
+
+  const ps1 = join(dirname(fileURLToPath(import.meta.url)), 'reveal-explorer.ps1')
+  if (!existsSync(ps1)) return
+  const env: NodeJS.ProcessEnv = { ...process.env, GROK_REVEAL_PATH: target }
+  setTimeout(() => {
+    spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-STA',
+        '-WindowStyle',
+        'Hidden',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        ps1,
+      ],
+      { detached: true, stdio: 'ignore', env },
+    ).unref()
+  }, 300)
 }
 
 export function revealInExplorer(path: string, cwd = ''): void {
@@ -498,11 +609,7 @@ export function revealInExplorer(path: string, cwd = ''): void {
     target = parent
   }
   if (process.platform === 'win32') {
-    const child = spawn('explorer.exe', [`/select,${target}`], {
-      detached: true,
-      stdio: 'ignore',
-    })
-    child.unref()
+    revealInExplorerWin(target)
     return
   }
   if (process.platform === 'darwin') {

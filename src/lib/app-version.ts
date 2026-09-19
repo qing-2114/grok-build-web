@@ -39,7 +39,10 @@ export async function fetchAppVersion(): Promise<AppVersionInfo> {
 }
 
 export async function updateApp(): Promise<AppUpdateResult> {
-  const res = await fetch('/api/app/update', { method: 'POST' })
+  const res = await fetch('/api/app/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  })
   return parseJson<AppUpdateResult>(res)
 }
 

@@ -315,7 +315,7 @@ cd {shlex.quote(str(ROOT))}
     fi
     sleep 1
   done
-  {opener} http://localhost:5173/ >/dev/null 2>&1 || true
+  {opener} http://127.0.0.1:5173/ >/dev/null 2>&1 || true
 ) &
 exec npm run dev
 """
@@ -383,7 +383,7 @@ def main() -> None:
     log(f"已创建：{lnk}")
 
     log("\n完成。")
-    log("双击桌面上的「Grok Build」即可启动本机操作台（http://localhost:5173/）。")
+    log("双击桌面上的「Grok Build」即可启动本机操作台（http://127.0.0.1:5173/）。")
 
 
 if __name__ == "__main__":

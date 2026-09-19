@@ -26,6 +26,7 @@ import {
   promptSession,
   setRemoteConfig,
   type AgentModel,
+  type PromptFile,
   type RemoteSession,
   type StreamEvent,
 } from './lib/agent'
@@ -41,7 +42,7 @@ import {
   SIDEBAR_WIDTH_DEFAULT,
   storedWidth,
 } from './lib/layout'
-import { loadState, saveState } from './lib/storage'
+import { loadState, saveState, type Persisted } from './lib/storage'
 import {
   displayTitle,
   firstPromptTitle,
@@ -116,7 +117,7 @@ type Action =
   | { type: 'add-project'; project: Project }
   | { type: 'delete-session'; id: string }
   | { type: 'rename-session'; id: string; title: string }
-  | { type: 'send'; text: string; images?: ChatImage[] }
+  | { type: 'send'; text: string; images?: ChatImage[]; sessionId?: string }
   | {
       type: 'bind-remote'
       localId: string
@@ -207,9 +208,21 @@ function clampEffort(modelId: string, effort: EffortLevel, models: AgentModel[])
   return model.efforts.includes('high') ? 'high' : model.efforts[0]
 }
 
-function pathKey(p: string): string {
-  return p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+function pathKey(p: string | null | undefined): string {
+  return (p ?? '')
+    .replace(/\//g, '\\')
+    .replace(/\\+$/, '')
+    .toLowerCase()
 }
+
+// Only a real AbortError counts as a user cancel. Server error text that
+// happens to contain "abort" / "cancel" must still reach the transcript.
+function isAbortError(err: unknown): boolean {
+  if (err instanceof DOMException) return err.name === 'AbortError'
+  return err instanceof Error && err.name === 'AbortError'
+}
+
+const SAVE_DEBOUNCE_MS = 300
 
 function matchProjectId(projects: Project[], cwd: string): string | null {
   const needle = pathKey(cwd)
@@ -560,6 +573,11 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
       delete overrides[action.id]
       const thinkingIds = state.thinkingIds.filter((id) => id !== action.id)
       const unreadIds = state.unreadIds.filter((id) => id !== action.id)
+      const outgoingQueue = state.outgoingQueue.filter(
+        (q) => q.sessionId !== action.id,
+      )
+      const hydratingId =
+        state.hydratingId === action.id ? null : state.hydratingId
       if (state.activeSessionId !== action.id) {
         return {
           ...state,
@@ -567,6 +585,8 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
           titleOverrides: overrides,
           thinkingIds,
           unreadIds,
+          outgoingQueue,
+          hydratingId,
           contextUsage:
             state.contextUsage?.sessionId === action.id
               ? null
@@ -581,6 +601,8 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         titleOverrides: overrides,
         thinkingIds,
         unreadIds,
+        outgoingQueue,
+        hydratingId,
         contextUsage: null,
       }
     }
@@ -589,7 +611,7 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
       if (!text && !action.images?.length) return state
       const now = Date.now()
       let sessions = state.sessions
-      let sessionId = state.activeSessionId
+      let sessionId = action.sessionId ?? state.activeSessionId
       let session = sessions.find((s) => s.id === sessionId)
       if (!session) {
         const draft = makeDraft(state.activeProjectId)
@@ -643,13 +665,19 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
       const without = state.sessions.filter(
         (s) => s.id !== action.localId && s.id !== action.sessionId,
       )
+      // Keep whatever the user is looking at right now: a draft opened while
+      // the remote session was being created must survive the bind.
+      const sessions = [next, ...dropEmptyDrafts(without, state.activeSessionId)]
+      const activeSessionId =
+        state.activeSessionId === action.localId
+          ? action.sessionId
+          : sessions.some((s) => s.id === state.activeSessionId)
+            ? state.activeSessionId
+            : next.id
       return {
         ...state,
-        sessions: [next, ...dropEmptyDrafts(without)],
-        activeSessionId:
-          state.activeSessionId === action.localId
-            ? action.sessionId
-            : state.activeSessionId,
+        sessions,
+        activeSessionId,
         thinkingIds: state.thinkingIds.map((id) =>
           id === action.localId ? action.sessionId : id,
         ),
@@ -676,20 +704,22 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         ...state,
         hydratingId:
           state.hydratingId === action.sessionId ? null : state.hydratingId,
-        sessions: state.sessions.map((s) =>
-          s.id === action.sessionId
-            ? {
-                ...s,
-                messages: action.messages,
-                title:
-                  state.titleOverrides[s.id] ||
-                  action.title ||
-                  (!isPlaceholderTitle(s.title) ? s.title : '') ||
-                  firstPromptTitle({ ...s, messages: action.messages }) ||
-                  s.title,
-              }
-            : s,
-        ),
+        sessions: state.sessions.map((s) => {
+          if (s.id !== action.sessionId) return s
+          // Anything written while the load was in flight is newer than the
+          // payload, so never clobber a session that already has messages.
+          if (s.messages.length > 0) return s
+          return {
+            ...s,
+            messages: action.messages,
+            title:
+              state.titleOverrides[s.id] ||
+              action.title ||
+              (!isPlaceholderTitle(s.title) ? s.title : '') ||
+              firstPromptTitle({ ...s, messages: action.messages }) ||
+              s.title,
+          }
+        }),
       }
     }
     case 'merge-remote': {
@@ -1147,8 +1177,12 @@ type WorkspaceApi = WorkspaceState & {
   setBranch: (branch: string) => void
   deleteSession: (id: string) => void
   renameSession: (id: string, title: string) => void
-  send: (text: string, files?: File[]) => void
-  enqueue: (text: string) => void
+  send: (
+    text: string,
+    files?: File[],
+    targetSessionId?: string,
+  ) => Promise<boolean>
+  enqueue: (text: string, files?: File[]) => void
   dropQueued: (id: string) => void
   sendQueued: (id: string) => void
   stopGeneration: () => void
@@ -1192,9 +1226,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const loadGen = useRef(0)
   const promptAbort = useRef(new Map<string, AbortController>())
   const userAbort = useRef(new Set<string>())
+  const pendingSave = useRef<Persisted | null>(null)
+  const saveTimer = useRef(0)
+  const queuedSending = useRef(new Set<string>())
 
   useEffect(() => {
-    saveState({
+    pendingSave.current = {
       projects: state.projects,
       activeProjectId: state.activeProjectId,
       activeSessionId: isGrokSessionId(state.activeSessionId ?? '')
@@ -1208,7 +1245,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       terminalShellId: state.terminalShellId,
       sidebarWidth: state.sidebarWidth,
       rightRailWidth: state.rightRailWidth,
-    })
+    }
+    window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      const next = pendingSave.current
+      pendingSave.current = null
+      if (next) saveState(next)
+    }, SAVE_DEBOUNCE_MS)
   }, [
     state.projects,
     state.activeProjectId,
@@ -1348,6 +1391,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     return () => {
       timers.current.forEach((t) => window.clearTimeout(t))
+      window.clearTimeout(saveTimer.current)
+      const next = pendingSave.current
+      pendingSave.current = null
+      if (next) saveState(next)
     }
   }, [])
 
@@ -1443,109 +1490,128 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [activeContextId, activeContextCwd, thinkingActive])
 
   const send = useCallback(
-    (text: string, files?: File[]) => {
-      void (async () => {
-        const snap = stateRef.current
-        if (snap.connection !== 'connected') {
-          notify('本机 Grok Build 未连接', 'error')
-          return
+    async (
+      text: string,
+      files?: File[],
+      targetSessionId?: string,
+    ): Promise<boolean> => {
+      const snap = stateRef.current
+      if (snap.connection !== 'connected') {
+        notify('本机 Grok Build 未连接', 'error')
+        return false
+      }
+      const target = targetSessionId ?? snap.activeSessionId
+      const session = target
+        ? (snap.sessions.find((s) => s.id === target) ?? null)
+        : null
+      if (!session) {
+        notify('会话已失效，请重新选择', 'error')
+        return false
+      }
+      if (snap.hydratingId === session.id) {
+        notify('会话正在载入，请稍候', 'error')
+        return false
+      }
+      const imageFiles = (files ?? []).filter(isImageFile)
+      const otherFiles = (files ?? []).filter((f) => !isImageFile(f))
+      let images: ChatImage[] = []
+      if (imageFiles.length) {
+        try {
+          images = await filesToChatImages(imageFiles)
+        } catch (err) {
+          notify(err instanceof Error ? err.message : '读取图片失败', 'error')
+          return false
         }
-        const imageFiles = (files ?? []).filter(isImageFile)
-        const otherFiles = (files ?? []).filter((f) => !isImageFile(f))
-        const images = imageFiles.length
-          ? await filesToChatImages(imageFiles)
-          : []
-        const payload =
-          text.trim() ||
-          (otherFiles.length
-            ? `请查看附件：${otherFiles.map((f) => f.name).join('、')}`
-            : '')
-        if (!payload && !files?.length) return
+      }
+      const payload =
+        text.trim() ||
+        (otherFiles.length
+          ? `请查看附件：${otherFiles.map((f) => f.name).join('、')}`
+          : '')
+      if (!payload && !files?.length) return false
 
-        let session =
-          snap.sessions.find((s) => s.id === snap.activeSessionId) ?? null
-        const projectId = session ? session.projectId : snap.activeProjectId
-        const project = projectId
-          ? (snap.projects.find((p) => p.id === projectId) ?? null)
-          : null
-        const cwd =
-          session?.source === 'grok'
-            ? session.cwd || project?.path || snap.homeDir
-            : project?.path || snap.homeDir
-        if (!cwd) {
-          notify('请先选择项目文件夹', 'error')
-          return
+      const projectId = session.projectId ?? snap.activeProjectId
+      const project = projectId
+        ? (snap.projects.find((p) => p.id === projectId) ?? null)
+        : null
+      const cwd =
+        session.source === 'grok'
+          ? session.cwd || project?.path || snap.homeDir
+          : project?.path || snap.homeDir
+      if (!cwd) {
+        notify('请先选择项目文件夹', 'error')
+        return false
+      }
+
+      let sessionId = session.id
+      dispatch({ type: 'send', text: payload, images, sessionId })
+      if (session.source !== 'grok') {
+        try {
+          const created = await createRemoteSession({
+            cwd,
+            permissionMode: snap.permissionMode,
+            model: snap.model,
+            effort: snap.effort,
+          })
+          dispatch({
+            type: 'bind-remote',
+            localId: sessionId,
+            sessionId: created.sessionId,
+            cwd,
+            projectId: project?.id ?? null,
+          })
+          sessionId = created.sessionId
+        } catch (err) {
+          dispatch({ type: 'thinking', sessionId, on: false })
+          notify(err instanceof Error ? err.message : '无法创建会话', 'error')
+          return false
         }
-
-        dispatch({
-          type: 'send',
-          text: payload,
-          images,
-        })
-        let sessionId = stateRef.current.activeSessionId
-        if (!sessionId) return
-
-        if (!session || session.source !== 'grok') {
-          try {
-            const created = await createRemoteSession({
-              cwd,
-              permissionMode: snap.permissionMode,
-              model: snap.model,
-              effort: snap.effort,
-            })
+      }
+      const ac = new AbortController()
+      promptAbort.current.get(sessionId)?.abort()
+      promptAbort.current.set(sessionId, ac)
+      let promptFiles: PromptFile[] = []
+      try {
+        promptFiles = files?.length ? await filesToPrompt(files) : []
+      } catch (err) {
+        if (promptAbort.current.get(sessionId) === ac) {
+          promptAbort.current.delete(sessionId)
+        }
+        dispatch({ type: 'thinking', sessionId, on: false })
+        notify(err instanceof Error ? err.message : '读取附件失败', 'error')
+        return false
+      }
+      const titleCwd = cwd
+      void promptSession(
+        sessionId,
+        { text: payload, files: promptFiles },
+        (event) => {
+          if (event.type === 'permission') {
             dispatch({
-              type: 'bind-remote',
-              localId: sessionId,
-              sessionId: created.sessionId,
-              cwd,
-              projectId: project?.id ?? null,
+              type: 'set-permission',
+              request: {
+                requestId: event.requestId,
+                title: event.title,
+                options: event.options,
+              },
             })
-            sessionId = created.sessionId
-          } catch (err) {
-            dispatch({ type: 'thinking', sessionId, on: false })
-            notify(err instanceof Error ? err.message : '无法创建会话', 'error')
             return
           }
-        }
-        const ac = new AbortController()
-        promptAbort.current.get(sessionId)?.abort()
-        promptAbort.current.set(sessionId, ac)
-        try {
-          const promptFiles = files?.length ? await filesToPrompt(files) : []
-          await promptSession(
-            sessionId,
-            { text: payload, files: promptFiles },
-            (event) => {
-              if (event.type === 'permission') {
-                dispatch({
-                  type: 'set-permission',
-                  request: {
-                    requestId: event.requestId,
-                    title: event.title,
-                    options: event.options,
-                  },
-                })
-                return
-              }
-              if (event.type === 'usage') {
-                dispatch({
-                  type: 'patch-context-used',
-                  sessionId,
-                  used: event.used,
-                })
-                return
-              }
-              if (event.type === 'thought') return
-              dispatch({ type: 'stream', sessionId, event })
-            },
-            ac.signal,
-          )
-        } catch (err) {
-          const aborted =
-            userAbort.current.has(sessionId) ||
-            (err instanceof DOMException && err.name === 'AbortError') ||
-            (err instanceof Error && /abort|cancel/i.test(err.message))
-          userAbort.current.delete(sessionId)
+          if (event.type === 'usage') {
+            dispatch({
+              type: 'patch-context-used',
+              sessionId,
+              used: event.used,
+            })
+            return
+          }
+          if (event.type === 'thought') return
+          dispatch({ type: 'stream', sessionId, event })
+        },
+        ac.signal,
+      )
+        .catch((err: unknown) => {
+          const aborted = userAbort.current.has(sessionId) || isAbortError(err)
           if (!aborted) {
             dispatch({
               type: 'stream',
@@ -1556,14 +1622,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
               },
             })
           }
-        } finally {
+        })
+        .finally(() => {
+          userAbort.current.delete(sessionId)
           if (promptAbort.current.get(sessionId) === ac) {
             promptAbort.current.delete(sessionId)
           }
           dispatch({ type: 'thinking', sessionId, on: false })
           dispatch({ type: 'set-permission', request: null })
           const sid = sessionId
-          const titleCwd = cwd
           const pullTitle = () => {
             if (stateRef.current.titleOverrides[sid]) return
             void fetchSessionTitle(sid, titleCwd)
@@ -1574,10 +1641,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
               .catch(() => undefined)
           }
           pullTitle()
-          const timer = window.setTimeout(pullTitle, 1800)
+          const timer = window.setTimeout(() => {
+            timers.current = timers.current.filter((t) => t !== timer)
+            pullTitle()
+          }, 1800)
           timers.current.push(timer)
-        }
-      })()
+        })
+      return true
     },
     [notify],
   )
@@ -1726,48 +1796,64 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     renameSession: (id, title) => dispatch({ type: 'rename-session', id, title }),
     send,
-    enqueue: (text) => {
+    enqueue: (text, files) => {
       const sessionId = stateRef.current.activeSessionId
       const payload = text.trim()
-      if (!sessionId || !payload) return
+      const attach = files?.length ? files : undefined
+      if (!sessionId || (!payload && !attach)) return
       dispatch({
         type: 'enqueue',
         item: {
           id: uid('wait'),
           sessionId,
           text: payload,
+          files: attach,
         },
       })
     },
     dropQueued: (id) => dispatch({ type: 'dequeue', id }),
     sendQueued: (id) => {
+      if (queuedSending.current.has(id)) return
       const item = stateRef.current.outgoingQueue.find((q) => q.id === id)
       if (!item) return
-      dispatch({ type: 'dequeue', id })
+      queuedSending.current.add(id)
       void (async () => {
-        const sid = item.sessionId
-        if (stateRef.current.thinkingIds.includes(sid)) {
-          userAbort.current.add(sid)
-          promptAbort.current.get(sid)?.abort()
-          if (isGrokSessionId(sid)) {
-            await cancelSession(sid).catch(() => undefined)
+        try {
+          const sid = item.sessionId
+          if (!stateRef.current.sessions.some((s) => s.id === sid)) {
+            dispatch({ type: 'dequeue', id })
+            notify('会话已删除，无法发送', 'error')
+            return
           }
-          const start = Date.now()
-          while (
-            stateRef.current.thinkingIds.includes(sid) &&
-            Date.now() - start < 8000
-          ) {
-            await new Promise((r) => window.setTimeout(r, 50))
+          if (stateRef.current.thinkingIds.includes(sid)) {
+            // Wait for the running turn instead of killing it.
+            const start = Date.now()
+            while (
+              stateRef.current.thinkingIds.includes(sid) &&
+              Date.now() - start < 8000
+            ) {
+              await new Promise((r) => window.setTimeout(r, 50))
+            }
+            if (stateRef.current.thinkingIds.includes(sid)) {
+              notify('仍在生成中，稍后再试', 'error')
+              return
+            }
           }
+          const ok = await send(item.text, item.files, sid)
+          if (ok) dispatch({ type: 'dequeue', id })
+        } finally {
+          queuedSending.current.delete(id)
         }
-        send(item.text)
       })()
     },
     stopGeneration: () => {
       const sid = stateRef.current.activeSessionId
       if (!sid || !stateRef.current.thinkingIds.includes(sid)) return
-      userAbort.current.add(sid)
-      promptAbort.current.get(sid)?.abort()
+      const ac = promptAbort.current.get(sid)
+      if (ac) {
+        userAbort.current.add(sid)
+        ac.abort()
+      }
       if (isGrokSessionId(sid)) {
         void cancelSession(sid).catch(() => undefined)
       }

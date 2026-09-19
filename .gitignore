@@ -19,6 +19,7 @@ __pycache__/
 *.pyc
 AGENTS.md
 handoff.md
+docs/issues/
 
 # Editor directories and files
 .vscode/*

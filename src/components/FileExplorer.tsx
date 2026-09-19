@@ -299,6 +299,14 @@ export function FileExplorer() {
         <p>{previewError}</p>
       </div>
     )
+  } else if (preview) {
+    body = (
+      <div className="files-empty">
+        <IconFolder />
+        <h2>暂不支持预览</h2>
+        <p>无法预览这种文件（{preview.kind}），可在资源管理器中打开。</p>
+      </div>
+    )
   } else {
     body = (
       <div className="files-empty">

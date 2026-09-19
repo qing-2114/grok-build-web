@@ -52,6 +52,12 @@ type Attachment = {
   preview: string | null
 }
 
+/**
+ * 发送和暂停共用同一个按钮：双击发送时，第一次点击已经派发了 prompt 并清空草稿，
+ * 第二次点击会看到「空草稿 + 生成中」而误当成暂停。这个窗口内忽略暂停请求。
+ */
+const SEND_STOP_GRACE_MS = 400
+
 function formatMarks(n: number): string {
   if (n < 1000) return String(Math.max(0, Math.round(n)))
   if (n < 10_000) {
@@ -253,6 +259,11 @@ export function Composer() {
   const fileRef = useRef<HTMLInputElement>(null)
   const filesRef = useRef(files)
   filesRef.current = files
+  // Timestamp of the last accepted send: a second click on the shared send/stop
+  // button arrives right after the draft was cleared, and must not cancel the
+  // prompt that click 1 just dispatched.
+  const lastSendAt = useRef(0)
+  const submitLock = useRef(false)
   const formId = useId()
 
   const menuPhase = useMemo(() => slashMenuPhase(draft), [draft])
@@ -410,7 +421,7 @@ export function Composer() {
     requestAnimationFrame(() => areaRef.current?.focus())
   }
 
-  function applySlash(out: SlashOutcome, attach: File[]) {
+  async function applySlash(out: SlashOutcome, attach: File[]): Promise<boolean> {
     if (out.kind === 'none') return false
     if (out.kind === 'insert') {
       setDraft(out.text)
@@ -428,22 +439,39 @@ export function Composer() {
       clearDraft()
       return true
     }
+    const text = out.text.trim()
     if (isThinking) {
-      enqueue(out.text)
+      if (!text || !activeSession?.id) return true
+      enqueue(text, attach)
       clearDraft()
       return true
     }
-    send(out.text, attach)
-    clearDraft()
+    const ok = await send(text, attach)
+    if (ok) {
+      lastSendAt.current = Date.now()
+      clearDraft()
+    }
     return true
   }
 
   function acceptSlash(cmd: SlashCommand) {
     if (!menuPhase) return
-    applySlash(acceptSlashPick(cmd, menuPhase, slashCtx), files.map((f) => f.file))
+    void applySlash(acceptSlashPick(cmd, menuPhase, slashCtx), files.map((f) => f.file))
   }
 
-  function submit() {
+  async function submit() {
+    // 一次只处理一次提交：发送要等附件转换，这段窗口里再点一下
+    // 会被当成「生成中再发一条」而排进等候列表，出现重复消息。
+    if (submitLock.current) return
+    submitLock.current = true
+    try {
+      await runSubmit()
+    } finally {
+      submitLock.current = false
+    }
+  }
+
+  async function runSubmit() {
     if (slashOpen && activeSlash) {
       acceptSlash(activeSlash)
       return
@@ -453,23 +481,27 @@ export function Composer() {
     const text = draft.trim()
     const slashOut = text.startsWith('/') ? resolveSlash(text, slashCtx) : { kind: 'none' as const }
     if (slashOut.kind !== 'none') {
-      applySlash(slashOut, attach)
+      await applySlash(slashOut, attach)
       return
     }
     const onlyImages = attach.length > 0 && attach.every(isImageFile)
     const payload =
       text || (names.length && !onlyImages ? `请查看附件：${names.join('、')}` : '')
     if (!payload && !attach.length) {
-      if (isThinking) stopGeneration()
+      if (isThinking && Date.now() - lastSendAt.current > SEND_STOP_GRACE_MS) {
+        stopGeneration()
+      }
       return
     }
     if (isThinking) {
-      if (!payload) return
-      enqueue(payload)
+      if (!payload || !activeSession?.id) return
+      enqueue(payload, attach)
       clearDraft()
       return
     }
-    send(payload, attach)
+    const ok = await send(payload, attach)
+    if (!ok) return
+    lastSendAt.current = Date.now()
     clearDraft()
   }
 
@@ -489,6 +521,8 @@ export function Composer() {
         return
       }
       if (e.key === 'Tab') {
+        // 没有匹配项时不要拦截 Tab，否则焦点会卡在输入框里。
+        if (!slashFlat.length) return
         e.preventDefault()
         if (activeSlash) acceptSlash(activeSlash)
         return
@@ -580,6 +614,7 @@ export function Composer() {
                   onClick={() => {
                     dropQueued(item.id)
                     setDraft(item.text)
+                    if (item.files?.length) addFiles(item.files)
                     requestAnimationFrame(() => areaRef.current?.focus())
                   }}
                 >
@@ -962,7 +997,7 @@ export function Composer() {
               className={showStop ? 'send-btn is-stop' : 'send-btn'}
               aria-label={showStop ? '暂停' : isThinking ? '加入等候' : '发送'}
               disabled={!canClick}
-              onClick={submit}
+              onClick={() => void submit()}
             >
               {showStop ? <IconStop /> : <IconSend />}
             </button>

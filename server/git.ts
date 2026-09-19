@@ -71,13 +71,59 @@ export async function gitInfo(path: string): Promise<GitInfo> {
   return { isRepo: true, branch, branches }
 }
 
+// git refname 规则：空白、~ ^ : ? * [ \ " ' 以及 `..`、`@{` 都不允许；
+// 以 `-` 开头会被 git 当成选项（`git checkout -f` 会静默丢掉未提交的改动），
+// 所以必须挡在这里。注意不能用 `git checkout -- <name>` 兜底：那个写法是
+// “恢复路径”，不是切分支。
+const BRANCH_BAD_CHARS = /[\s~^:?*[\\"']/
+
+export function assertBranchName(raw: string): string {
+  const name = raw.trim()
+  if (!name) throw new Error('缺少路径或分支名')
+  if (name.length > 255) throw new Error('分支名过长')
+  if (name.startsWith('-')) throw new Error('分支名不能以 - 开头')
+  if (
+    BRANCH_BAD_CHARS.test(name) ||
+    name.includes('..') ||
+    name.includes('@{')
+  ) {
+    throw new Error('分支名包含非法字符')
+  }
+  for (const ch of name) {
+    const code = ch.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) throw new Error('分支名包含非法字符')
+  }
+  return name
+}
+
+// UI 只发 gitInfo 列出的本地分支，所以这里要求名字确实存在于仓库里；
+// 顺带放行远端跟踪分支（origin/x）和 detached HEAD 的 "HEAD"，
+// 免得把合法的切换挡掉。
+async function assertKnownBranch(cwd: string, name: string): Promise<void> {
+  const info = await gitInfo(cwd)
+  if (!info.isRepo) throw new Error('不是 git 仓库')
+  if (info.branches.includes(name)) return
+  const listed = await runGit(cwd, [
+    'for-each-ref',
+    '--format=%(refname:short)',
+    'refs/remotes',
+  ])
+  const remotes = listed.out
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (remotes.includes(name)) return
+  throw new Error(`找不到分支 ${name}`)
+}
+
 export async function gitCheckout(
   path: string,
   branch: string,
 ): Promise<void> {
   const cwd = normalizePath(path)
-  const name = branch.trim()
-  if (!cwd || !name) throw new Error('缺少路径或分支名')
+  if (!cwd) throw new Error('缺少路径或分支名')
+  const name = assertBranchName(branch)
+  await assertKnownBranch(cwd, name)
   const result = await runGit(cwd, ['checkout', name])
   if (result.code !== 0) {
     throw new Error(result.err.trim() || result.out.trim() || 'git checkout 失败')

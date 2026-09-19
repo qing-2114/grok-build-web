@@ -19,6 +19,8 @@ import { Popover } from './Popover'
 import { ResizeHandle } from './ResizeHandle'
 import { UserMenu } from './UserMenu'
 
+const PROJECT_SESSION_PREVIEW = 5
+
 function SessionRow({
   session,
   override,
@@ -173,15 +175,21 @@ function DeleteProjectDialog({
 }) {
   const [deleteChats, setDeleteChats] = useState(true)
   const cancelRef = useRef<HTMLButtonElement>(null)
+  // onClose 是父组件每次渲染新建的箭头函数，放进 ref 让 effect 只跑一次，
+  // 否则每次流式输出都会重新抢焦点。
+  const closeRef = useRef(onClose)
+  useEffect(() => {
+    closeRef.current = onClose
+  })
 
   useEffect(() => {
     cancelRef.current?.focus()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') closeRef.current()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [])
 
   return createPortal(
     <div className="dialog-root is-confirm" role="presentation">
@@ -283,6 +291,9 @@ export function Sidebar() {
     name: string
     chatCount: number
   } | null>(null)
+  const [sessionMoreByProject, setSessionMoreByProject] = useState<
+    Record<string, boolean>
+  >({})
 
   useEffect(() => {
     if (searchOpen) searchRef.current?.focus()
@@ -412,6 +423,14 @@ export function Sidebar() {
               const chats = sessionsFor(project)
               const expanded =
                 Boolean(q) || expandedProjectId === project.id
+              const searching = Boolean(q)
+              const showAllSessions =
+                searching || Boolean(sessionMoreByProject[project.id])
+              const visibleChats =
+                showAllSessions || chats.length <= PROJECT_SESSION_PREVIEW
+                  ? chats
+                  : chats.slice(0, PROJECT_SESSION_PREVIEW)
+              const hiddenCount = chats.length - PROJECT_SESSION_PREVIEW
               return (
                 <li
                   key={project.id}
@@ -494,7 +513,7 @@ export function Sidebar() {
                   </div>
                   {expanded ? (
                     <ul className="project-chats">
-                      {chats.map((session) => (
+                      {visibleChats.map((session) => (
                         <SessionRow
                           key={session.id}
                           session={session}
@@ -524,6 +543,28 @@ export function Sidebar() {
                       ))}
                       {chats.length === 0 ? (
                         <li className="rail-empty">还没有会话</li>
+                      ) : null}
+                      {!searching && hiddenCount > 0 ? (
+                        <li>
+                          <button
+                            type="button"
+                            className="session-more"
+                            aria-expanded={Boolean(
+                              sessionMoreByProject[project.id],
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setSessionMoreByProject((prev) => ({
+                                ...prev,
+                                [project.id]: !prev[project.id],
+                              }))
+                            }}
+                          >
+                            {sessionMoreByProject[project.id]
+                              ? '收起'
+                              : `显示更多（${hiddenCount}）`}
+                          </button>
+                        </li>
                       ) : null}
                     </ul>
                   ) : null}

@@ -6,7 +6,6 @@ import {
   IconMenu,
   IconPanelRight,
   IconSidebar,
-  IconSpark,
 } from '../icons'
 import { looksLikeFilePath } from '../lib/paths'
 import { stripImageTokens } from '../lib/images'
@@ -120,8 +119,9 @@ function StatusPill() {
 
 function imagesBefore(messages: Message[], index: number): ChatImage[] {
   for (let i = index; i >= 0; i--) {
-    const imgs = messages[i].images
-    if (messages[i].role === 'user' && imgs?.length) return imgs
+    if (messages[i].role !== 'user') continue
+    // 只认当前这一轮的用户消息；再往前就是上一轮的图，不能拿来配 [Image #N]。
+    return messages[i].images ?? []
   }
   return []
 }
@@ -395,7 +395,7 @@ export function ChatPane() {
               {isHydrating ? (
                 <div className="thinking">
                   <span className="who-mark">
-                    <IconSpark />
+                    <img src="/grok-icon.png" alt="" />
                   </span>
                   <span className="caret" />
                   <span className="thinking-label">正在载入会话</span>
@@ -404,7 +404,7 @@ export function ChatPane() {
               {isThinking ? (
                 <div className="thinking">
                   <span className="who-mark">
-                    <IconSpark />
+                    <img src="/grok-icon.png" alt="" />
                   </span>
                   <span className="caret" />
                   <span className="thinking-label">正在思考</span>

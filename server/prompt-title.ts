@@ -23,7 +23,7 @@ export async function generatedTitleFromDisk(
     grokHome(),
     'sessions',
     encodeURIComponent(cwd),
-    sessionId,
+    encodeURIComponent(sessionId),
     'summary.json',
   )
   try {
@@ -49,7 +49,7 @@ export async function titleFromFirstPrompt(
     grokHome(),
     'sessions',
     encodeURIComponent(cwd),
-    sessionId,
+    encodeURIComponent(sessionId),
     'updates.jsonl',
   )
   try {
@@ -89,6 +89,8 @@ export async function titleFromFirstPrompt(
       }
       if (buf.trim()) break
     }
+  } catch {
+    return ''
   } finally {
     rl.close()
     stream.destroy()

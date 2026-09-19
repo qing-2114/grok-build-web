@@ -1,6 +1,7 @@
 import { homedir } from 'node:os'
-import { join } from 'node:path'
-import { readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 
 export type ApiBackend = 'chat_completions' | 'responses' | 'messages'
 export type EffortValue = 'low' | 'medium' | 'high' | 'xhigh'
@@ -136,8 +137,57 @@ function parseBasicString(raw: string): string {
   return out
 }
 
+// 极简行扫描：只回答两个问题——这一行结束时是否还在多行字符串（""" / '''）
+// 里面，以及行内注释（未被引号包住的 `#`）从哪个下标开始。不做完整语法解析。
+type LineScan = { open: string | null; commentAt: number }
+
+function scanTomlLine(line: string, open: string | null): LineScan {
+  let i = 0
+  let state = open
+  while (i < line.length) {
+    if (state) {
+      const at = line.indexOf(state, i)
+      if (at < 0) return { open: state, commentAt: -1 }
+      i = at + state.length
+      state = null
+      continue
+    }
+    const ch = line[i]
+    if (ch === '#') return { open: null, commentAt: i }
+    if (ch === '"' || ch === "'") {
+      const delim = ch.repeat(3)
+      if (line.startsWith(delim, i)) {
+        const at = line.indexOf(delim, i + 3)
+        if (at < 0) {
+          state = delim
+          i = line.length
+          continue
+        }
+        i = at + 3
+        continue
+      }
+      let j = i + 1
+      while (j < line.length) {
+        if (ch === '"' && line[j] === '\\') {
+          j += 2
+          continue
+        }
+        if (line[j] === ch) break
+        j += 1
+      }
+      if (j >= line.length) return { open: null, commentAt: -1 }
+      i = j + 1
+      continue
+    }
+    i += 1
+  }
+  return { open: state, commentAt: -1 }
+}
+
+// `name = foo # x` 的值是 foo，不能把 `# x` 一起当成值存进去。
 function parseScalar(raw: string): string | number | boolean {
-  const v = raw.trim()
+  const scan = scanTomlLine(raw, null)
+  const v = (scan.commentAt >= 0 ? raw.slice(0, scan.commentAt) : raw).trim()
   if (v === 'true') return true
   if (v === 'false') return false
   if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) {
@@ -164,11 +214,20 @@ type RawModel = {
   efforts: Array<Record<string, string | number | boolean>>
 }
 
+// 删掉原文里所有 model 段（包括 [model.x.sampling] 这类子表），
+// 重新生成。多行字符串里的 `[model.` 不是表头，不能被误判。
 function stripModelSections(text: string): string {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
   const out: string[] = []
   let skip = false
+  let open: string | null = null
   for (const line of lines) {
+    const startedInString = open != null
+    open = scanTomlLine(line, open).open
+    if (startedInString) {
+      if (!skip) out.push(line)
+      continue
+    }
     const trimmed = line.trim()
     if (LABEL_RE.test(trimmed)) continue
     if (/^\s*\[/.test(line)) {
@@ -179,21 +238,43 @@ function stripModelSections(text: string): string {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()
 }
 
+// 逐行解析。凡是重新生成会丢内容的东西（注释、空行、子表、未知键、复杂值、
+// 多行字符串）都原样塞进 extraLines，写回时照原样吐出来。
 function parseRawModels(text: string): RawModel[] {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
   const byId = new Map<string, RawModel>()
   let current: RawModel | null = null
   let effort: Record<string, string | number | boolean> | null = null
+  let inSubTable = false
+  let open: string | null = null
 
   const finishEffort = () => {
     if (!current || !effort) return
     current.efforts.push(effort)
     effort = null
   }
+  const keep = (rawLine: string) => {
+    if (current) current.extraLines.push(rawLine)
+  }
 
   for (const rawLine of lines) {
-    const trimmed = rawLine.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
+    const startedInString = open != null
+    const scan = scanTomlLine(rawLine, open)
+    open = scan.open
+    if (startedInString) {
+      keep(rawLine)
+      continue
+    }
+    const body =
+      scan.commentAt >= 0 ? rawLine.slice(0, scan.commentAt) : rawLine
+    const comment = scan.commentAt >= 0 ? rawLine.slice(scan.commentAt) : ''
+    const trimmed = body.trim()
+    if (!trimmed) {
+      // 空行不进 extraLines：dumpModel 自己会在每张 effort 表前插空行，
+      // 段与段之间也会拼空行，保留空行会一轮一轮地越积越多。
+      if (comment) keep(rawLine)
+      continue
+    }
     if (trimmed.startsWith('[')) {
       finishEffort()
       const header = parseHeader(trimmed)
@@ -203,6 +284,7 @@ function parseRawModels(text: string): RawModel[] {
         header.path.length < 2
       ) {
         current = null
+        inSubTable = false
         continue
       }
       const catalogId = header.path[1]
@@ -214,32 +296,56 @@ function parseRawModels(text: string): RawModel[] {
       current = rec
       if (header.array && header.path[2] === 'reasoning_efforts') {
         effort = {}
+        inSubTable = false
       } else if (header.path.length > 2) {
-        current = null
+        // [model.foo.sampling] 之类：原样保留，绝不能整段删掉。
+        inSubTable = true
+        effort = null
+        keep(rawLine)
       } else {
         effort = null
+        inSubTable = false
       }
+      if (comment) keep(comment)
       continue
     }
     if (!current) continue
     const eq = trimmed.indexOf('=')
     if (eq < 0) {
-      if (!effort) current.extraLines.push(rawLine)
+      keep(rawLine)
       continue
     }
     const keyRaw = trimmed.slice(0, eq).trim()
     const valRaw = trimmed.slice(eq + 1).trim()
     const key = keyRaw.startsWith('"') ? parseBasicString(keyRaw) : keyRaw
-    const complex = valRaw.startsWith('{') || valRaw.startsWith('[')
+    if (inSubTable) {
+      // 子表里的键属于子表，不能当成 model 的字段。
+      keep(rawLine)
+      continue
+    }
+    const complex =
+      valRaw.startsWith('{') ||
+      valRaw.startsWith('[') ||
+      valRaw.startsWith('"""') ||
+      valRaw.startsWith("'''")
     if (effort) {
+      // effort 表整段由 dumpModel 重新生成（label 用固定文案、default 给首选档），
+      // 所以这里只取 value/id：表里的自定义 label 等键仍会丢，属既有行为。
       if (!complex) effort[key] = parseScalar(valRaw)
+      if (comment) keep(comment)
       continue
     }
     if (complex) {
-      current.extraLines.push(rawLine)
+      keep(rawLine)
+      continue
+    }
+    if (!KNOWN_FIELDS.has(key)) {
+      // 未知键整行原样保留，避免重新格式化时丢注释或改变字面量。
+      keep(rawLine)
       continue
     }
     current.fields[key] = parseScalar(valRaw)
+    if (comment) keep(comment)
   }
   finishEffort()
   return [...byId.values()]
@@ -270,12 +376,6 @@ const KNOWN_FIELDS = new Set([
   'hidden',
 ])
 
-function formatScalar(v: string | number | boolean): string {
-  if (typeof v === 'string') return tomlString(v)
-  if (typeof v === 'boolean') return v ? 'true' : 'false'
-  return String(v)
-}
-
 function rawToModel(raw: RawModel): DeployModel & {
   baseUrl: string
   apiKey: string
@@ -286,11 +386,8 @@ function rawToModel(raw: RawModel): DeployModel & {
     .map((row) => String(row.value ?? row.id ?? ''))
     .filter(isEffort)
   const backendRaw = asString(raw.fields.api_backend, 'chat_completions')
+  // 未知键在 parseRawModels 里已经按原样进了 extraLines，这里不再重新拼。
   const extraLines = [...raw.extraLines]
-  for (const [key, value] of Object.entries(raw.fields)) {
-    if (KNOWN_FIELDS.has(key)) continue
-    extraLines.push(`${key} = ${formatScalar(value)}`)
-  }
   return {
     catalogId: raw.catalogId,
     model: asString(raw.fields.model, raw.catalogId),
@@ -497,10 +594,24 @@ function normalizeModel(input: DeployModel, providerId: string, taken: Set<strin
     name: String(input.name ?? '').trim() || model,
     contextWindow,
     efforts: efforts.length ? efforts : ['high'],
-    extraLines: Array.isArray(input.extraLines)
-      ? input.extraLines.filter((l) => typeof l === 'string').slice(0, 40)
-      : [],
+    // 绝不接受客户端传来的 extraLines：那是逐行写进 [model.*] 的原文，
+    // 伪造它可以注入 base_url 甚至整个 [model.evil] 段。真正的 extraLines
+    // 由 mergeProviderExtraLines 从磁盘上已有的解析结果里取回。
+    extraLines: [],
   }
+}
+
+// 保存时用磁盘上已有的 extraLines（同 catalogId）覆盖请求里的，保住用户
+// config.toml 里原有的注释、未知键和子表；新模型就是空数组。
+export function mergeProviderExtraLines(
+  provider: DeployProvider,
+  existing: DeployModel[],
+): DeployModel[] {
+  const byId = new Map(existing.map((m) => [m.catalogId, m]))
+  return provider.models.map((m) => ({
+    ...m,
+    extraLines: [...(byId.get(m.catalogId)?.extraLines ?? [])],
+  }))
 }
 
 export function parseProviderBody(body: Record<string, unknown>): DeployProvider {
@@ -540,64 +651,100 @@ async function readToml(): Promise<string> {
   }
 }
 
+// config.toml 的读-改-写全部串到一条 promise 链上：两个标签页同时保存时
+// 排队执行，而不是互相覆盖。
+let writeChain: Promise<unknown> = Promise.resolve()
+
+function withConfigLock<T>(job: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(job, job)
+  writeChain = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
+// 先写同目录临时文件再 rename 覆盖：中途崩溃也不会把用户的配置（含 API Key）
+// 截断成半截。Windows 上 rename 会替换已存在的目标文件。
+async function writeFileAtomic(path: string, text: string): Promise<void> {
+  const tmp = join(dirname(path), `.${randomUUID()}.config.toml.tmp`)
+  try {
+    await writeFile(tmp, text, 'utf8')
+    await rename(tmp, path)
+    return
+  } catch {
+    // 目标被别的进程占住（杀软、编辑器）时 rename 会失败，退回直接写：
+    // 和改动前一样能用，只是少了原子性。
+    await rm(tmp, { force: true }).catch(() => undefined)
+  }
+  await writeFile(path, text, 'utf8')
+}
+
 function belongsToProvider(catalogId: string, providerId: string, previousIds: Set<string>): boolean {
   if (previousIds.has(catalogId)) return true
   return catalogId === providerId || catalogId.startsWith(`${providerId}-`)
 }
 
 export async function saveProvider(provider: DeployProvider): Promise<DeployProvider[]> {
-  const text = await readToml()
-  const existing = parseRawModels(text).map(rawToModel)
-  const labels = readLabels(text)
-  const previous = groupProviders(existing, labels).find((p) => p.id === provider.id)
-  const previousIds = new Set((previous?.models ?? []).map((m) => m.catalogId))
-  const kept = existing.filter(
-    (m) => !belongsToProvider(m.catalogId, provider.id, previousIds),
-  )
-  const hidden = !provider.enabled
-  const nextRows = [
-    ...kept,
-    ...provider.models.map((m) => ({
-      ...m,
-      baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey,
-      apiBackend: provider.apiBackend,
-      hidden,
-    })),
-  ]
-  labels.set(provider.id, provider.name)
-  const others = groupProviders(kept, labels).filter((p) => p.id !== provider.id)
-  await writeModels(text, nextRows, [...others, provider])
-  return groupProviders(nextRows, labels)
+  return withConfigLock(async () => {
+    const text = await readToml()
+    const existing = parseRawModels(text).map(rawToModel)
+    const labels = readLabels(text)
+    const previous = groupProviders(existing, labels).find((p) => p.id === provider.id)
+    const previousIds = new Set((previous?.models ?? []).map((m) => m.catalogId))
+    const kept = existing.filter(
+      (m) => !belongsToProvider(m.catalogId, provider.id, previousIds),
+    )
+    const hidden = !provider.enabled
+    const nextRows = [
+      ...kept,
+      ...mergeProviderExtraLines(provider, existing).map((m) => ({
+        ...m,
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        apiBackend: provider.apiBackend,
+        hidden,
+      })),
+    ]
+    labels.set(provider.id, provider.name)
+    const others = groupProviders(kept, labels).filter((p) => p.id !== provider.id)
+    await writeModels(text, nextRows, [...others, provider])
+    return groupProviders(nextRows, labels)
+  })
 }
 
 export async function deleteProvider(id: string): Promise<DeployProvider[]> {
-  const providerId = assertProviderId(id)
-  const text = await readToml()
-  const existing = parseRawModels(text).map(rawToModel)
-  const labels = readLabels(text)
-  const previous = groupProviders(existing, labels).find((p) => p.id === providerId)
-  if (!previous) throw new Error('找不到该供应商')
-  const previousIds = new Set(previous.models.map((m) => m.catalogId))
-  const kept = existing.filter(
-    (m) => !belongsToProvider(m.catalogId, providerId, previousIds),
-  )
-  labels.delete(providerId)
-  const remaining = groupProviders(kept, labels)
-  await writeModels(text, kept, remaining)
-  return remaining
+  return withConfigLock(async () => {
+    const providerId = assertProviderId(id)
+    const text = await readToml()
+    const existing = parseRawModels(text).map(rawToModel)
+    const labels = readLabels(text)
+    const previous = groupProviders(existing, labels).find((p) => p.id === providerId)
+    if (!previous) throw new Error('找不到该供应商')
+    const previousIds = new Set(previous.models.map((m) => m.catalogId))
+    const kept = existing.filter(
+      (m) => !belongsToProvider(m.catalogId, providerId, previousIds),
+    )
+    labels.delete(providerId)
+    const remaining = groupProviders(kept, labels)
+    await writeModels(text, kept, remaining)
+    return remaining
+  })
 }
 
-async function writeModels(
+export type ConfigModelRow = DeployModel & {
+  baseUrl: string
+  apiKey: string
+  apiBackend: ApiBackend
+  hidden: boolean
+}
+
+// 纯函数版本：把磁盘原文和要保留的行拼成新的 config.toml 内容，不碰文件系统。
+export function renderConfigToml(
   original: string,
-  rows: Array<DeployModel & {
-    baseUrl: string
-    apiKey: string
-    apiBackend: ApiBackend
-    hidden: boolean
-  }>,
+  rows: ConfigModelRow[],
   providers: DeployProvider[],
-): Promise<void> {
+): string {
   const rest = stripModelSections(original)
   const labels = providers
     .filter((p) => p.models.length)
@@ -624,8 +771,21 @@ async function writeModels(
   const body = [rest.trimEnd(), labels, chunks.join('\n\n')]
     .filter(Boolean)
     .join('\n\n')
-  const final = body.endsWith('\n') ? body : `${body}\n`
-  await writeFile(configPath(), final, 'utf8')
+  return body.endsWith('\n') ? body : `${body}\n`
+}
+
+async function writeModels(
+  original: string,
+  rows: ConfigModelRow[],
+  providers: DeployProvider[],
+): Promise<void> {
+  const final = renderConfigToml(original, rows, providers)
+  await writeFileAtomic(configPath(), final)
+}
+
+// 纯函数：按 listProviders/saveProvider 的方式把磁盘原文解析成行。
+export function parseConfigModels(text: string): ConfigModelRow[] {
+  return parseRawModels(text).map(rawToModel)
 }
 
 export function assertHttpUrl(raw: string): URL {
@@ -637,6 +797,9 @@ export function assertHttpUrl(raw: string): URL {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error('请求地址只支持 http 或 https')
+  }
+  if (!url.hostname) {
+    throw new Error('请求地址缺少主机名')
   }
   return url
 }

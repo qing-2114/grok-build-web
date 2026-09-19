@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { IconClose } from '../icons'
 import {
@@ -27,18 +27,33 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 关闭对话框时请求可能还在路上，之后不要再 setState。
+  const aliveRef = useRef(true)
+  const closeRef = useRef(onClose)
+  useEffect(() => {
+    closeRef.current = onClose
+  })
+
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
 
   async function check() {
     setLoading(true)
     setError(null)
     try {
       const next = await fetchAppVersion()
+      if (!aliveRef.current) return
       setInfo(next)
     } catch (err) {
+      if (!aliveRef.current) return
       setError(err instanceof Error ? err.message : '检查失败')
       setInfo(null)
     } finally {
-      setLoading(false)
+      if (aliveRef.current) setLoading(false)
     }
   }
 
@@ -48,11 +63,11 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') closeRef.current()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [])
 
   async function onUpdate() {
     if (!info?.canUpdate || updating) return
@@ -67,7 +82,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
     } catch (err) {
       notify(err instanceof Error ? err.message : '更新失败', 'error')
     } finally {
-      setUpdating(false)
+      if (aliveRef.current) setUpdating(false)
     }
   }
 

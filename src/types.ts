@@ -62,6 +62,7 @@ export type QueuedPrompt = {
   id: string
   sessionId: string
   text: string
+  files?: File[]
 }
 
 export type ContextUsage = {

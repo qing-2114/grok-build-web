@@ -164,6 +164,7 @@ const LANG_BY_EXT: Record<string, string> = {
 
 const TEXT_MAX = 1_200_000
 const IMAGE_MAX = 8_000_000
+const MAX_PREVIEW_BYTES = 8 * 1024 * 1024
 
 function extOf(name: string): string {
   if (name.startsWith('.') && !name.slice(1).includes('.')) {
@@ -375,6 +376,14 @@ export async function readPreview(
     mime,
     size: st.size,
     ancestors,
+  }
+  // 未知扩展名一律当文本，先按大小兜底，避免把整个大文件读进内存
+  if (st.size > MAX_PREVIEW_BYTES) {
+    return {
+      ...baseMeta,
+      kind: 'binary',
+      message: '文件过大，无法预览',
+    }
   }
   if (IMAGE_EXT.has(e)) {
     return {

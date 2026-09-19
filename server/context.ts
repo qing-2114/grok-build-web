@@ -46,7 +46,11 @@ async function findSessionDir(
       cwd.replace(/\\/g, '/'),
     ]
     for (const path of variants) {
-      const dir = join(root, encodeURIComponent(path), sessionId)
+      const dir = join(
+        root,
+        encodeURIComponent(path),
+        encodeURIComponent(sessionId),
+      )
       if (tried.has(dir)) continue
       tried.add(dir)
       candidates.push(dir)
@@ -61,7 +65,7 @@ async function findSessionDir(
     const groups = await readdir(root, { withFileTypes: true })
     for (const group of groups) {
       if (!group.isDirectory()) continue
-      const dir = join(root, group.name, sessionId)
+      const dir = join(root, group.name, encodeURIComponent(sessionId))
       if (await exists(join(dir, 'signals.json')) || await exists(join(dir, 'summary.json'))) {
         return dir
       }

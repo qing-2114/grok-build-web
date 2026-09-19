@@ -3,6 +3,11 @@ import { EventEmitter } from 'node:events'
 
 export type JsonRpcId = number
 
+const DEFAULT_TIMEOUT_MS = 30_000
+
+// 生成时长不可预估，prompt 只给一个足够长的兜底，让卡死的请求最终也能清理监听器
+export const PROMPT_TIMEOUT_MS = 30 * 60 * 1000
+
 type Pending = {
   resolve: (value: unknown) => void
   reject: (err: Error) => void
@@ -28,6 +33,10 @@ type RpcMessage = {
   params?: Record<string, unknown>
   result?: unknown
   error?: { code?: number; message?: string; data?: unknown }
+}
+
+function timeoutLabel(ms: number): string {
+  return ms >= 1000 ? `${Math.round(ms / 1000)} 秒` : `${ms} 毫秒`
 }
 
 function rpcError(err: RpcMessage['error']): Error {
@@ -101,6 +110,7 @@ export class GrokAcp extends EventEmitter {
   request<T = unknown>(
     method: string,
     params: Record<string, unknown> = {},
+    timeoutMs = DEFAULT_TIMEOUT_MS,
   ): Promise<T> {
     if (!this.proc || !this.connected) {
       return Promise.reject(new Error('本机 Grok Build 未连接'))
@@ -108,13 +118,33 @@ export class GrokAcp extends EventEmitter {
     const id = this.nextId++
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params })
     return new Promise<T>((resolve, reject) => {
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              this.pending.delete(id)
+              const sessionId = params.sessionId
+              if (typeof sessionId === 'string' && sessionId) {
+                this.cancelPermissions(sessionId)
+              }
+              reject(
+                new Error(`${method} 超时（${timeoutLabel(timeoutMs)}无响应）`),
+              )
+            }, timeoutMs)
+          : null
       this.pending.set(id, {
-        resolve: (value) => resolve(value as T),
-        reject,
+        resolve: (value) => {
+          if (timer) clearTimeout(timer)
+          resolve(value as T)
+        },
+        reject: (err) => {
+          if (timer) clearTimeout(timer)
+          reject(err)
+        },
       })
       this.proc!.stdin.write(payload + '\n', (err) => {
         if (err) {
           this.pending.delete(id)
+          if (timer) clearTimeout(timer)
           reject(err)
         }
       })
@@ -134,6 +164,9 @@ export class GrokAcp extends EventEmitter {
   ): boolean {
     const req = this.permissions.get(rpcId)
     if (!req) return false
+    if (optionId && !req.options.some((o) => o.optionId === optionId)) {
+      return false
+    }
     this.permissions.delete(rpcId)
     if (optionId) {
       this.respond(rpcId, {
@@ -143,6 +176,14 @@ export class GrokAcp extends EventEmitter {
       this.respond(rpcId, { outcome: { outcome: 'cancelled' } })
     }
     return true
+  }
+
+  cancelPermissions(sessionId: string): void {
+    for (const [rpcId, req] of this.permissions) {
+      if (req.sessionId !== sessionId) continue
+      this.permissions.delete(rpcId)
+      this.respond(rpcId, { outcome: { outcome: 'cancelled' } })
+    }
   }
 
   private async boot(): Promise<void> {

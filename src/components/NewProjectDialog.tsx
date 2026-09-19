@@ -24,18 +24,24 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
   const nameId = useId()
   const pathId = useId()
   const firstRef = useRef<HTMLInputElement>(null)
+  // onClose 是父组件每次渲染新建的箭头函数，放进 ref，让下面的 effect 只跑一次，
+  // 否则流式输出期间会不断重设 40ms 定时器，把焦点从用户正在输入的框里抢走。
+  const closeRef = useRef(onClose)
+  useEffect(() => {
+    closeRef.current = onClose
+  })
 
   useEffect(() => {
     const t = window.setTimeout(() => firstRef.current?.focus(), 40)
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') closeRef.current()
     }
     window.addEventListener('keydown', onKey)
     return () => {
       window.clearTimeout(t)
       window.removeEventListener('keydown', onKey)
     }
-  }, [onClose])
+  }, [])
 
   async function browse() {
     try {
@@ -127,7 +133,11 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
                 setPath(v)
                 if (!name) setName(folderNameFromPath(v))
               }}
-              placeholder={isWindowsPlatform() ? '例如 F:\\your-project' : '例如 /Users/you/your-project'}
+              placeholder={
+                isWindowsPlatform()
+                  ? '例如 F:\\your-project'
+                  : '例如 /Users/you/your-project'
+              }
               autoComplete="off"
               spellCheck={false}
             />

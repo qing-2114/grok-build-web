@@ -228,6 +228,20 @@ export async function cancelSession(id: string): Promise<void> {
   await parseJson(res)
 }
 
+function parseFrame(line: string): StreamEvent | null {
+  const trimmed = line.trim()
+  if (!trimmed) return null
+  try {
+    const ev: unknown = JSON.parse(trimmed)
+    if (!ev || typeof ev !== 'object') return null
+    if (typeof (ev as { type?: unknown }).type !== 'string') return null
+    return ev as StreamEvent
+  } catch {
+    // partial / malformed frame: skip instead of surfacing a SyntaxError
+    return null
+  }
+}
+
 export async function promptSession(
   id: string,
   input: { text: string; files?: PromptFile[] },
@@ -247,27 +261,30 @@ export async function promptSession(
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
-    let nl = buf.indexOf('\n')
-    while (nl >= 0) {
-      const line = buf.slice(0, nl).trim()
-      buf = buf.slice(nl + 1)
-      if (line) {
-        const ev = JSON.parse(line) as StreamEvent
-        onEvent(ev)
-        if (ev.type === 'error') throw new Error(ev.message)
-      }
-      nl = buf.indexOf('\n')
-    }
-  }
-  const tail = buf.trim()
-  if (tail) {
-    const ev = JSON.parse(tail) as StreamEvent
+  const consume = (line: string): void => {
+    const ev = parseFrame(line)
+    if (!ev) return
     onEvent(ev)
     if (ev.type === 'error') throw new Error(ev.message)
+  }
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      let nl = buf.indexOf('\n')
+      while (nl >= 0) {
+        const line = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        consume(line)
+        nl = buf.indexOf('\n')
+      }
+    }
+    buf += decoder.decode()
+    if (buf.trim()) consume(buf)
+  } finally {
+    // Release the body on every exit path, including a thrown error frame.
+    await reader.cancel().catch(() => undefined)
   }
 }
 

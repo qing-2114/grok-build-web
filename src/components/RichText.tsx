@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { IconCheck, IconCopy } from '../icons'
 import { isWebUrl, looksLikeFilePath } from '../lib/paths'
 import type { ChatImage } from '../types'
@@ -170,12 +170,18 @@ function isImageOnlyLine(line: string): boolean {
 
 function CodeBlock({ code }: { code: string }) {
   const [copied, setCopied] = useState(false)
+  const copyTimer = useRef(0)
+
+  useEffect(() => {
+    return () => window.clearTimeout(copyTimer.current)
+  }, [])
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(code)
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 1600)
+      window.clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1600)
     } catch {
       setCopied(false)
     }

@@ -22,6 +22,16 @@ export function Settings() {
   const [avatar, setAvatar] = useState(profile.avatar)
   const [shells, setShells] = useState<ShellInfo[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
+  // 模型部署页把「有未保存的修改」写在这里，离开这一页前确认一次。
+  const deployDirtyRef = useRef(false)
+  // 上下文里的 setter / 值每次 provider 渲染都会换新引用（每个流式 token 都会换），
+  // 所以只读一次 /api/shells：把最新的 setter 和当前值放进 ref，挂载时拉一次即可。
+  const setTerminalShellRef = useRef(setTerminalShell)
+  const terminalShellRef = useRef(terminalShellId)
+  useEffect(() => {
+    setTerminalShellRef.current = setTerminalShell
+    terminalShellRef.current = terminalShellId
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -29,8 +39,9 @@ export function Settings() {
       .then((list) => {
         if (cancelled) return
         setShells(list)
-        if (list.length && !list.some((s) => s.id === terminalShellId)) {
-          setTerminalShell(list[0].id)
+        const current = terminalShellRef.current
+        if (list.length && !list.some((s) => s.id === current)) {
+          setTerminalShellRef.current(list[0].id)
         }
       })
       .catch(() => {
@@ -39,7 +50,7 @@ export function Settings() {
     return () => {
       cancelled = true
     }
-  }, [setTerminalShell, terminalShellId])
+  }, [])
 
   async function onAvatar(file: File | undefined) {
     if (!file) return
@@ -61,6 +72,18 @@ export function Settings() {
     notify('个人资料已保存', 'success')
   }
 
+  /** 离开模型部署页会丢掉没保存的改动，先问一声。 */
+  function leaveDeploy(): boolean {
+    if (page !== 'deploy' || !deployDirtyRef.current) return true
+    return window.confirm('模型部署有未保存的修改，确定要放弃吗？')
+  }
+
+  function goPage(next: SettingsPage) {
+    if (next === page) return
+    if (!leaveDeploy()) return
+    setPage(next)
+  }
+
   const currentShell =
     shells.find((s) => s.id === terminalShellId) ?? shells[0] ?? null
 
@@ -70,7 +93,10 @@ export function Settings() {
         <button
           type="button"
           className="text-btn"
-          onClick={() => setSettingsOpen(false)}
+          onClick={() => {
+            if (!leaveDeploy()) return
+            setSettingsOpen(false)
+          }}
         >
           ← 返回
         </button>
@@ -86,7 +112,7 @@ export function Settings() {
                 ? 'settings-nav-item is-active'
                 : 'settings-nav-item'
             }
-            onClick={() => setPage('general')}
+            onClick={() => goPage('general')}
           >
             <IconSliders />
             通用
@@ -98,7 +124,7 @@ export function Settings() {
                 ? 'settings-nav-item is-active'
                 : 'settings-nav-item'
             }
-            onClick={() => setPage('deploy')}
+            onClick={() => goPage('deploy')}
           >
             <IconCpu />
             模型部署
@@ -110,7 +136,7 @@ export function Settings() {
                 ? 'settings-nav-item is-active'
                 : 'settings-nav-item'
             }
-            onClick={() => setPage('profile')}
+            onClick={() => goPage('profile')}
           >
             <IconUser />
             个人资料
@@ -174,7 +200,7 @@ export function Settings() {
               </div>
             </section>
           ) : page === 'deploy' ? (
-            <ModelDeploy />
+            <ModelDeploy dirtyRef={deployDirtyRef} />
           ) : (
             <section className="settings-card">
               <h2>个人资料</h2>

@@ -100,6 +100,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "你
 
 图标可用 `public/grok-icon.ico`。macOS / Linux 会生成 `Grok Build.command`，双击后启动 `npm run dev` 并打开浏览器。
 
+Windows 上服务是**无窗口**启动的：不会弹出终端窗口。输出写到 `%LOCALAPPDATA%\grok-build-web\dev.log`（每次启动重写），启动超时会弹窗并附上日志尾巴。
+
+停止服务（双击即可，或直接跑脚本）：
+
+```text
+scripts\stop-grok-build.cmd
+```
+
+它只结束占用 5173 的 node 进程树；如果端口被别的程序占着，会提示而不动手。旧版启动脚本留下的、可见的「Grok Build」命令行窗口不会被它关掉（那里可能还有在跑的服务），会提示 PID，手动关掉即可。
+
 ## 现在能做什么
 
 - **新建对话**：空画布，中间是 Grok 图标；第一条消息会在对应项目目录下创建一条 grok 会话

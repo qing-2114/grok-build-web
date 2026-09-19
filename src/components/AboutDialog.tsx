@@ -75,7 +75,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
     try {
       const result = await updateApp()
       notify(
-        `已更新到 ${result.localVersion || result.remoteVersion}。请关掉名为 Grok Build 的命令行窗口，再开桌面快捷方式。`,
+        `已更新到 ${result.localVersion || result.remoteVersion}。请先跑 scripts\\stop-grok-build.cmd 停掉后台服务，再开桌面快捷方式。`,
         'success',
       )
       await check()

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { IconCheck, IconCopy } from '../icons'
 import { isWebUrl, looksLikeFilePath } from '../lib/paths'
 import type { ChatImage } from '../types'
@@ -243,9 +243,13 @@ function ImageBlock({
   return <p className="prose-p">{inline(line, images, openers)}</p>
 }
 
-export function RichText({
+// 文档流里每条已完成的回复都是一个 RichText；流式输出时只有最后一条的 text 在变，
+// memo 让其余回复跳过 markdown 重解析。
+const NO_IMAGES: ChatImage[] = []
+
+export const RichText = memo(function RichText({
   text,
-  images = [],
+  images = NO_IMAGES,
   onOpenFile,
   onOpenUrl,
   onReveal,
@@ -403,4 +407,4 @@ export function RichText({
   }
 
   return <div className="prose">{nodes}</div>
-}
+})

@@ -1,23 +1,22 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { FitAddon } from '@xterm/addon-fit'
+import { Terminal } from '@xterm/xterm'
+import '@xterm/xterm/css/xterm.css'
 import { IconTerminal } from '../icons'
 import {
   interruptTerminal,
   killTerminal,
+  resizeTerminal,
   sendTerminal,
   startTerminal,
+  type TerminalMode,
 } from '../lib/fs'
 import { useWorkspace } from '../workspace'
 
 type StreamMsg =
-  | { type: 'history'; text: string }
+  | { type: 'history'; text: string; mode?: TerminalMode }
   | { type: 'data'; text: string }
   | { type: 'exit'; code: number }
-
-/**
- * 服务端回放缓冲是 200 000 字符；本地留一倍，重连后还能往上翻一点，
- * 同时避免整段输出无限增长、每来一块数据就重排整个 <pre>。
- */
-const TERM_OUTPUT_MAX = 400_000
 
 /**
  * 已经被取代的 effect 里拉起的 shell，先等一小会儿再回收：
@@ -25,62 +24,51 @@ const TERM_OUTPUT_MAX = 400_000
  */
 const SHELL_ORPHAN_GRACE_MS = 1200
 
-function capOut(text: string): string {
-  return text.length > TERM_OUTPUT_MAX
-    ? text.slice(-TERM_OUTPUT_MAX)
-    : text
-}
-
-/** ANSI 转义（颜色、清屏、光标等）会在 <pre> 里显示成 \x1b[…m 乱码，按序列扫掉。 */
-const ESC_CHAR = '\u001b'
-const BEL_CHAR = '\u0007'
-const CSI_FINAL = /[@-~]/
-
-function stripAnsi(text: string): string {
-  let i = text.indexOf(ESC_CHAR)
-  if (i < 0) return text
-  let out = ''
-  let start = 0
-  while (i >= 0) {
-    out += text.slice(start, i)
-    i += 1
-    const kind = text[i]
-    if (kind === '[') {
-      i += 1
-      while (i < text.length && !CSI_FINAL.test(text[i])) i += 1
-      i += 1
-    } else if (kind === ']') {
-      i += 1
-      while (
-        i < text.length &&
-        text[i] !== BEL_CHAR &&
-        !(text[i] === ESC_CHAR && text[i + 1] === '\\')
-      ) {
-        i += 1
-      }
-      i += text[i] === BEL_CHAR ? 1 : 2
-    } else {
-      i += 1
-    }
-    start = i
-    i = text.indexOf(ESC_CHAR, i)
-  }
-  return out + text.slice(start)
+const THEME = {
+  background: '#0a0a0c',
+  foreground: '#f4f1ea',
+  cursor: '#f4f1ea',
+  cursorAccent: '#0a0a0c',
+  selectionBackground: 'rgba(244, 241, 234, 0.24)',
+  black: '#1c1c1f',
+  brightBlack: '#6f6d67',
+  red: '#d97878',
+  brightRed: '#e89a9a',
+  green: '#9ec9a8',
+  brightGreen: '#b8dcc0',
+  yellow: '#e8a87c',
+  brightYellow: '#f0c39f',
+  blue: '#8cb4ff',
+  brightBlue: '#adc9ff',
+  magenta: '#c5a3e8',
+  brightMagenta: '#d8bff0',
+  cyan: '#86c9c9',
+  brightCyan: '#a9dcdc',
+  white: '#d8d5ce',
+  brightWhite: '#f4f1ea',
 }
 
 export function TerminalPane() {
-  const { sessionCwd, terminalShellId, notify } = useWorkspace()
+  const { sessionCwd, terminalShellId, notify } = useWorkspace(
+    'sessionCwd',
+    'terminalShellId',
+    'notify',
+  )
   const [termId, setTermId] = useState<string | null>(null)
-  const [out, setOut] = useState('')
+  const [mode, setMode] = useState<TerminalMode>('pty')
   const [cmd, setCmd] = useState('')
   const [running, setRunning] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const outRef = useRef<HTMLPreElement>(null)
+  const hostRef = useRef<HTMLDivElement>(null)
+  const xtermRef = useRef<Terminal | null>(null)
+  const fitRef = useRef<FitAddon | null>(null)
   const sourceRef = useRef<EventSource | null>(null)
   // 当前面板实际在用的 shell id；卸载时用它决定要不要回收。
   const ownedIdRef = useRef<string | null>(null)
   const killedRef = useRef(new Set<string>())
-  const view = useMemo(() => stripAnsi(out), [out])
+  // 键盘输入要按顺序到达 shell：串成一条 promise 链，同一帧里的按键合并发送。
+  const live = useRef({ id: null as string | null, mode: 'pty' as TerminalMode, running: false })
+  const pending = useRef('')
+  const sendChain = useRef<Promise<void>>(Promise.resolve())
 
   function killShell(id: string) {
     if (killedRef.current.has(id)) return
@@ -88,19 +76,98 @@ export function TerminalPane() {
     void killTerminal(id).catch(() => undefined)
   }
 
+  // xterm 实例跟着面板走，只建一次。
   useEffect(() => {
-    if (outRef.current) {
-      outRef.current.scrollTop = outRef.current.scrollHeight
+    const host = hostRef.current
+    if (!host) return
+    const term = new Terminal({
+      theme: THEME,
+      fontFamily: "'IBM Plex Mono', 'Cascadia Mono', Consolas, 'Microsoft YaHei', monospace",
+      fontSize: 12.5,
+      lineHeight: 1.25,
+      cursorBlink: true,
+      scrollback: 5000,
+      allowProposedApi: false,
+    })
+    const fit = new FitAddon()
+    term.loadAddon(fit)
+    term.open(host)
+    xtermRef.current = term
+    fitRef.current = fit
+
+    // 有选区时 Ctrl+C 复制而不是发中断；Ctrl+V 交给浏览器粘贴事件。
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true
+      const key = e.key.toLowerCase()
+      if (e.ctrlKey && key === 'c' && (e.shiftKey || term.hasSelection())) {
+        const text = term.getSelection()
+        if (text) void navigator.clipboard.writeText(text).catch(() => undefined)
+        term.clearSelection()
+        return false
+      }
+      if (e.ctrlKey && key === 'v') return false
+      return true
+    })
+    const sub = term.onData((data) => {
+      const id = live.current.id
+      if (live.current.mode !== 'pty' || !id || !live.current.running) return
+      const flush = !pending.current
+      pending.current += data
+      if (!flush) return
+      queueMicrotask(() => {
+        const text = pending.current
+        pending.current = ''
+        sendChain.current = sendChain.current
+          .then(() => sendTerminal(id, text))
+          .catch(() => undefined)
+      })
+    })
+
+    let resizeTimer = 0
+    const refit = () => {
+      try {
+        fit.fit()
+      } catch {
+        return
+      }
+      window.clearTimeout(resizeTimer)
+      resizeTimer = window.setTimeout(() => {
+        const id = live.current.id
+        if (id && live.current.mode === 'pty' && live.current.running) {
+          void resizeTerminal(id, term.cols, term.rows).catch(() => undefined)
+        }
+      }, 80)
     }
-  }, [out])
+    const ro = new ResizeObserver(refit)
+    ro.observe(host)
+    // 等字体加载完再量一次字宽，否则列数会算错。
+    void document.fonts?.ready.then(refit)
+    refit()
+
+    return () => {
+      ro.disconnect()
+      window.clearTimeout(resizeTimer)
+      sub.dispose()
+      term.dispose()
+      xtermRef.current = null
+      fitRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     if (!sessionCwd) return
     let cancelled = false
     let createdId: string | null = null
-    setBusy(true)
-    setOut('')
-    void startTerminal(sessionCwd, terminalShellId)
+    const term = xtermRef.current
+    term?.reset()
+    term?.write('\x1b[2m正在打开终端…\x1b[0m')
+    try {
+      fitRef.current?.fit()
+    } catch {
+      // 面板还没布局好
+    }
+    const size = term ? { cols: term.cols, rows: term.rows } : undefined
+    void startTerminal(sessionCwd, terminalShellId, size)
       .then((created) => {
         createdId = created.id
         if (cancelled) {
@@ -112,8 +179,14 @@ export function TerminalPane() {
           return
         }
         ownedIdRef.current = created.id
+        live.current = { id: created.id, mode: created.mode, running: true }
         setTermId(created.id)
+        setMode(created.mode)
         setRunning(true)
+        // 复用已有 shell 时尺寸可能是上一个面板的，按当前面板再同步一次。
+        if (created.mode === 'pty' && term) {
+          void resizeTerminal(created.id, term.cols, term.rows).catch(() => undefined)
+        }
         const es = new EventSource(
           `/api/terminal/${encodeURIComponent(created.id)}/stream`,
         )
@@ -125,34 +198,40 @@ export function TerminalPane() {
           } catch {
             return
           }
+          const t = xtermRef.current
+          if (!t) return
           if (msg.type === 'history') {
-            setOut(capOut(msg.text))
+            t.reset()
+            // 管道模式的输出只有 \n，xterm 需要 \r\n 才回到行首。
+            t.write(created.mode === 'pipe' ? msg.text.replace(/\r?\n/g, '\r\n') : msg.text)
+            live.current.running = true
             setRunning(true)
           } else if (msg.type === 'data') {
-            setRunning(true)
-            setOut((s) => capOut(s + msg.text))
+            t.write(created.mode === 'pipe' ? msg.text.replace(/\r?\n/g, '\r\n') : msg.text)
           } else if (msg.type === 'exit') {
+            live.current.running = false
             setRunning(false)
-            setOut((s) => capOut(s + `\r\n进程已退出 (${msg.code})\r\n`))
+            t.write(`\r\n\x1b[2m进程已退出 (${msg.code})\x1b[0m\r\n`)
           }
         }
         es.onerror = () => {
-          // EventSource 会自己重连；这里只是暂时禁用输入，
-          // 重连后收到 history / data 会把 running 打开。
-          if (!cancelled) setRunning(false)
+          // EventSource 会自己重连；重连后收到 history 会把 running 打开。
+          if (cancelled) return
+          live.current.running = false
+          setRunning(false)
         }
+        if (created.mode === 'pty') term?.focus()
       })
       .catch((err: unknown) => {
         if (cancelled) return
+        xtermRef.current?.write(`\r\n\x1b[31m${err instanceof Error ? err.message : '无法打开终端'}\x1b[0m\r\n`)
         notify(err instanceof Error ? err.message : '无法打开终端', 'error')
-      })
-      .finally(() => {
-        if (!cancelled) setBusy(false)
       })
     return () => {
       cancelled = true
       sourceRef.current?.close()
       sourceRef.current = null
+      live.current = { id: null, mode: 'pty', running: false }
       if (createdId && ownedIdRef.current === createdId) {
         ownedIdRef.current = null
         killShell(createdId)
@@ -202,6 +281,7 @@ export function TerminalPane() {
             onClick={() => {
               if (!termId) return
               killShell(termId)
+              live.current.running = false
               setRunning(false)
             }}
           >
@@ -209,26 +289,30 @@ export function TerminalPane() {
           </button>
         </div>
       </div>
-      <pre className="term-out" ref={outRef}>
-        {busy && !out ? '正在打开终端…' : view}
-      </pre>
-      <form className="term-in" onSubmit={(e) => void onSubmit(e)}>
-        <span>{running ? '>' : '#'}</span>
-        <input
-          value={cmd}
-          onChange={(e) => setCmd(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'c' && e.ctrlKey && termId) {
-              e.preventDefault()
-              void interruptTerminal(termId)
-            }
-          }}
-          placeholder={running ? '输入命令' : '终端已结束'}
-          disabled={!running}
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </form>
+      <div
+        className="term-screen"
+        ref={hostRef}
+        onClick={() => xtermRef.current?.focus()}
+      />
+      {mode === 'pipe' ? (
+        <form className="term-in" onSubmit={(e) => void onSubmit(e)}>
+          <span>{running ? '>' : '#'}</span>
+          <input
+            value={cmd}
+            onChange={(e) => setCmd(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'c' && e.ctrlKey && termId) {
+                e.preventDefault()
+                void interruptTerminal(termId)
+              }
+            }}
+            placeholder={running ? '输入命令（简易模式）' : '终端已结束'}
+            disabled={!running}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </form>
+      ) : null}
     </div>
   )
 }

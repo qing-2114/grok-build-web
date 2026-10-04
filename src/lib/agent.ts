@@ -1,4 +1,10 @@
-import type { EffortLevel, Message, PermissionMode } from '../types'
+import type {
+  EffortLevel,
+  Message,
+  PermissionMode,
+  PlanEntry,
+  TurnUsage,
+} from '../types'
 
 export type AgentModel = {
   id: string
@@ -55,6 +61,8 @@ export type StreamEvent =
   | { type: 'done'; stopReason: string }
   | { type: 'error'; message: string }
   | { type: 'usage'; used: number }
+  | { type: 'plan'; entries: PlanEntry[] }
+  | { type: 'turn'; usage: TurnUsage; stopReason: string }
 
 export type PromptFile = {
   name: string
@@ -164,6 +172,7 @@ export async function loadRemoteSession(
   cwd: string
   title: string
   messages: Message[]
+  plan?: PlanEntry[]
 }> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/load`, {
     method: 'POST',
@@ -314,4 +323,45 @@ export function isGrokSessionId(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
     id,
   )
+}
+
+export type SearchHit = { id: string; cwd: string; snippet: string; updatedAt: number }
+
+export async function searchSessionText(q: string, signal?: AbortSignal): Promise<SearchHit[]> {
+  const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal })
+  const data = await parseJson<{ hits: SearchHit[] }>(res)
+  return data.hits ?? []
+}
+
+export type UsageRow = TurnUsage & { turns: number }
+export type UsageReport = {
+  days: Array<UsageRow & { date: string }>
+  models: Array<UsageRow & { model: string }>
+  sessions: Array<UsageRow & { id: string; cwd: string }>
+  totals: UsageRow
+}
+
+export async function fetchUsageReport(days = 30): Promise<UsageReport> {
+  const res = await fetch(`/api/usage?days=${days}`)
+  return parseJson(res)
+}
+
+export type ToolDiff = { path: string; oldText: string; newText: string; truncated: boolean }
+export type ToolDetail = {
+  found: boolean
+  input: string
+  output: string
+  diffs: ToolDiff[]
+  truncated: boolean
+}
+
+export async function fetchToolDetail(
+  sessionId: string,
+  cwd: string,
+  toolId: string,
+): Promise<ToolDetail> {
+  const res = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/tools/${encodeURIComponent(toolId)}?cwd=${encodeURIComponent(cwd)}`,
+  )
+  return parseJson(res)
 }

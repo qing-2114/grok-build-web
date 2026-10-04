@@ -10,6 +10,7 @@ import {
   IconSearch,
   IconTrash,
 } from '../icons'
+import { searchSessionText, type SearchHit } from '../lib/agent'
 import { SIDEBAR_WIDTH_DEFAULT } from '../lib/layout'
 import { relativeTime } from '../lib/time'
 import { displayTitle } from '../lib/title'
@@ -120,7 +121,10 @@ function ProjectMenu({
   close: () => void
   onDeleteProject: () => void
 }) {
-  const { setProjectDialog, deleteProjectChats } = useWorkspace()
+  const { setProjectDialog, deleteProjectChats } = useWorkspace(
+    'setProjectDialog',
+    'deleteProjectChats',
+  )
   return (
     <>
       <button
@@ -278,9 +282,37 @@ export function Sidebar() {
     titleOverrides,
     thinkingIds,
     unreadIds,
-  } = useWorkspace()
+    history,
+  } = useWorkspace(
+    'filteredProjects',
+    'filteredHistory',
+    'activeProjectId',
+    'activeSessionId',
+    'expandedProjectId',
+    'search',
+    'sidebarCollapsed',
+    'sidebarWidth',
+    'mobileNavOpen',
+    'setSearch',
+    'newChat',
+    'selectProject',
+    'selectSession',
+    'deleteSession',
+    'deleteProject',
+    'renameSession',
+    'setProjectDialog',
+    'toggleSidebar',
+    'setSidebarWidth',
+    'setMobileNav',
+    'titleOverrides',
+    'thinkingIds',
+    'unreadIds',
+    'history',
+  )
 
   const [searchOpen, setSearchOpen] = useState(false)
+  const [textHits, setTextHits] = useState<SearchHit[]>([])
+  const [textSearching, setTextSearching] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const renameRef = useRef<HTMLInputElement>(null)
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(
@@ -311,6 +343,37 @@ export function Sidebar() {
   }
 
   const looseSessions = filteredHistory.filter((s) => !s.projectId)
+
+  // 标题 / 项目名之外，再按会话正文搜一遍（服务端扫 updates.jsonl，有缓存）。
+  const textQuery = q.length >= 2 ? q : ''
+  useEffect(() => {
+    if (!textQuery) return
+    const ac = new AbortController()
+    const timer = window.setTimeout(() => {
+      setTextSearching(true)
+      void searchSessionText(textQuery, ac.signal)
+        .then(setTextHits)
+        .catch(() => {
+          if (!ac.signal.aborted) setTextHits([])
+        })
+        .finally(() => {
+          if (!ac.signal.aborted) setTextSearching(false)
+        })
+    }, 300)
+    return () => {
+      ac.abort()
+      window.clearTimeout(timer)
+    }
+  }, [textQuery])
+
+  const titleHitIds = new Set(filteredHistory.map((s) => s.id))
+  const contentHits = textQuery
+    ? textHits.flatMap((hit) => {
+        if (titleHitIds.has(hit.id)) return []
+        const session = history.find((s) => s.id === hit.id)
+        return session ? [{ hit, session }] : []
+      })
+    : []
 
   function commitRename() {
     if (!renaming) return
@@ -611,6 +674,36 @@ export function Sidebar() {
                   onRenameCancel={() => setRenaming(null)}
                 />
               ))}
+            </ul>
+          </section>
+        ) : null}
+        {textQuery && (contentHits.length > 0 || textSearching) ? (
+          <section className="rail-section">
+            <div className="rail-label">
+              <span>正文匹配</span>
+            </div>
+            <ul className="rail-list">
+              {contentHits.map(({ hit, session }) => (
+                <li key={hit.id} className="session-row content-hit">
+                  <button
+                    type="button"
+                    className={
+                      session.id === activeSessionId
+                        ? 'rail-item session-item is-active'
+                        : 'rail-item session-item'
+                    }
+                    onClick={() => selectSession(session.id)}
+                  >
+                    <span className="rail-text">
+                      {displayTitle(session, titleOverrides[session.id])}
+                    </span>
+                    <span className="content-hit-snippet">{hit.snippet}</span>
+                  </button>
+                </li>
+              ))}
+              {textSearching && contentHits.length === 0 ? (
+                <li className="rail-empty">正在搜索会话正文…</li>
+              ) : null}
             </ul>
           </section>
         ) : null}

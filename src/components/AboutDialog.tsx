@@ -22,7 +22,7 @@ function commitMeta(commit: AppCommit | null): string {
 }
 
 export function AboutDialog({ onClose }: { onClose: () => void }) {
-  const { notify, openExternalUrl } = useWorkspace()
+  const { notify, openExternalUrl } = useWorkspace('notify', 'openExternalUrl')
   const [info, setInfo] = useState<AppVersionInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState(false)

@@ -118,7 +118,15 @@ scripts\stop-grok-build.cmd
 - **会话区**：文档流（标题 + 正文 + 工具卡片），不是聊天气泡；暂停生成；等候队列
 - **输入坞**：项目、git 分支（会真实 `checkout`）、权限（询问 / 计划 / 自动 / 始终批准）、模型 + 思考强度、附件、斜杠命令
 - **模型部署**：设置里添加自定义供应商（请求地址、API Key、协议）。协议为 Grok Build 原生直连的 Chat Completions / Responses / Messages，无需本地路由。可获取模型列表、勾选思考强度、设置上下文；**测试接口**只验 Key 能否连通地址，每个模型可单独测推理
-- **右侧栏**：审查当前文件夹的 git 更改；在会话目录打开集成终端（Windows 检测 PowerShell / Command Prompt / Git Bash / WSL，macOS / Linux 检测 zsh / bash / fish / sh）；浏览并预览文件（代码高亮、Markdown、PDF、Word）
+- **右侧栏**：审查当前文件夹的 git 更改，可按文件暂存 / 撤销并直接提交；在会话目录打开集成终端（伪终端 + xterm.js，vim、交互输入、进度条都能用；Windows 检测 PowerShell / Command Prompt / Git Bash / WSL，macOS / Linux 检测 zsh / bash / fish / sh）；浏览并预览文件（代码高亮、Markdown、PDF、Word）
+- **`@` 引用文件**：输入框里打 `@` 模糊查找当前项目的文件
+- **命令面板**：`Ctrl+K` 搜操作、会话、项目、文件，切换权限和模型，导出会话为 Markdown
+- **工具详情与计划**：工具卡片每条可展开看输出和改动对比；agent 推送计划时显示清单；每轮显示用量和用时
+- **编辑后重发 / 重试**：把发过的消息放回输入框修改，或重发最后一条
+- **完成提醒**：页面在后台时，回复完成或等待批准会发系统通知
+- **全文搜索**：侧栏搜索同时匹配会话正文
+- **MCP 服务器**：设置里通过 `grok mcp` 增删改、启用停用、检查连通性
+- **用量统计**：设置里按天、按模型、按会话汇总本机会话的标记用量
 - **文件链接**：对话里的路径单击即可在右侧预览；网页用 Ctrl/⌘+单击在系统浏览器打开
 - **侧栏宽度**：左右侧栏都可以拖动；双击边缘恢复默认宽度
 
@@ -137,4 +145,4 @@ scripts\stop-grok-build.cmd
 - 生成中可暂停；再输入发送会进入等候列表
 - 右侧栏用可关闭的标签打开文件，不是固定三个按钮
 
-项目和个人资料存在浏览器 `localStorage` 键 `grok-build-web.v5`。会话正文由本机 grok 存在 `~/.grok/sessions`。自定义模型写在 `~/.grok/config.toml`。
+项目和个人资料存在浏览器 `localStorage` 键 `grok-build-web.v5`。会话正文由本机 grok 存在 `~/.grok/sessions`。自定义模型和 MCP 服务器写在 `~/.grok/config.toml`（MCP 只通过 `grok mcp` 修改）。

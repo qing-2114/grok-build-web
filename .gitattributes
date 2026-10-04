@@ -1,0 +1,13 @@
+# 仓库内统一 LF；Windows 端编辑器写回 CRLF 也不会让整仓变「已修改」。
+* text=auto eol=lf
+
+# Windows 脚本保持 CRLF（PowerShell 5.1 / cmd 对 LF 不友好）。
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.png binary
+*.ico binary
+*.jpg binary
+*.pdf binary
+*.docx binary

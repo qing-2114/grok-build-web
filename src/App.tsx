@@ -1,6 +1,7 @@
 import { useEffect, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { ChatPane } from './components/ChatPane'
+import { CommandPalette } from './components/CommandPalette'
 import { NewProjectDialog } from './components/NewProjectDialog'
 import { PermissionDialog } from './components/PermissionDialog'
 import { RightRail } from './components/RightRail'
@@ -10,11 +11,23 @@ import { IconCheck } from './icons'
 import { useWorkspace } from './workspace'
 
 function Shortcuts() {
-  const { settingsOpen, openRightPanel } = useWorkspace()
+  const { settingsOpen, openRightPanel, paletteOpen, setPaletteOpen } = useWorkspace(
+    'settingsOpen',
+    'openRightPanel',
+    'paletteOpen',
+    'setPaletteOpen',
+  )
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (settingsOpen) return
+      // 焦点在集成终端里时，Ctrl+K / Ctrl+P 等都是 shell 自己的按键，不抢。
+      if (e.target instanceof Element && e.target.closest('.xterm')) return
       const key = e.key.toLowerCase()
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key === 'k') {
+        e.preventDefault()
+        setPaletteOpen(!paletteOpen)
+        return
+      }
+      if (settingsOpen || paletteOpen) return
       if (e.ctrlKey && e.shiftKey && !e.altKey && key === 'g') {
         e.preventDefault()
         openRightPanel('review')
@@ -37,12 +50,12 @@ function Shortcuts() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [settingsOpen, openRightPanel])
+  }, [settingsOpen, openRightPanel, paletteOpen, setPaletteOpen])
   return null
 }
 
 function Toast() {
-  const { toast } = useWorkspace()
+  const { toast } = useWorkspace('toast')
   if (!toast) return null
   return createPortal(
     <div
@@ -61,7 +74,10 @@ function Toast() {
 }
 
 function MobileScrim() {
-  const { mobileNavOpen, setMobileNav } = useWorkspace()
+  const { mobileNavOpen, setMobileNav } = useWorkspace(
+    'mobileNavOpen',
+    'setMobileNav',
+  )
   if (!mobileNavOpen) return null
   return (
     <button
@@ -74,7 +90,13 @@ function MobileScrim() {
 }
 
 export default function App() {
-  const { settingsOpen, toast, sidebarWidth, rightRailWidth } = useWorkspace()
+  const { settingsOpen, settingsPage, toast, sidebarWidth, rightRailWidth } = useWorkspace(
+    'settingsOpen',
+    'settingsPage',
+    'toast',
+    'sidebarWidth',
+    'rightRailWidth',
+  )
   return (
     <div
       className="app"
@@ -89,9 +111,10 @@ export default function App() {
       <Sidebar />
       <ChatPane />
       <RightRail />
-      {settingsOpen ? <Settings /> : null}
+      {settingsOpen ? <Settings key={settingsPage} /> : null}
       <NewProjectDialog />
       <PermissionDialog />
+      <CommandPalette />
       <MobileScrim />
       {toast ? <Toast key={toast.id} /> : null}
     </div>

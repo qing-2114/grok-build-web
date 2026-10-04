@@ -6,11 +6,21 @@ import { assertSafeSessionId, HttpError } from './guard.ts'
 import {
   gitChanges,
   gitCheckout,
+  gitCommit,
+  gitDiscard,
   gitFileDiff,
   gitInfo,
+  gitStage,
+  gitUnstage,
   normalizePath,
 } from './git.ts'
-import { listDir, readPreview, streamRaw } from './fs.ts'
+import { findFiles, listDir, readPreview, streamRaw } from './fs.ts'
+import {
+  searchSessions,
+  sessionExtrasFromDisk,
+  toolDetail,
+  usageReport,
+} from './session-index.ts'
 import {
   closeTerminal,
   defaultShellId,
@@ -18,6 +28,7 @@ import {
   interruptTerminal,
   openExternal,
   openLocalHtml,
+  resizeTerminal,
   revealInExplorer,
   startTerminal,
   streamTerminal,
@@ -45,6 +56,14 @@ import {
   type StreamEvent,
 } from './transcript.ts'
 import { readAppVersion, updateApp } from './app-version.ts'
+import {
+  doctorMcp,
+  listMcp,
+  removeMcp,
+  saveMcp,
+  setMcpEnabled,
+  type McpInput,
+} from './mcp.ts'
 
 type SessionListItem = {
   sessionId: string
@@ -202,6 +221,16 @@ function buildPrompt(body: Record<string, unknown>): unknown[] {
   }
   if (blocks.length === 0) blocks.push({ type: 'text', text: ' ' })
   return blocks
+}
+
+// git 写操作失败多半是用户输入或仓库状态问题，回 400 带原因。
+async function gitWrite(res: ServerResponse, run: () => Promise<unknown>): Promise<void> {
+  try {
+    const result = await run()
+    sendJson(res, 200, { ok: true, ...(result && typeof result === 'object' ? result : {}) })
+  } catch (err) {
+    sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+  }
 }
 
 export function createRouter(acp: GrokAcp) {
@@ -439,6 +468,66 @@ async function handle(
     return
   }
 
+  if (match(method, path, 'GET', '/api/mcp')) {
+    const cwd = url.searchParams.get('cwd') || ''
+    try {
+      sendJson(res, 200, { servers: await listMcp(cwd) })
+    } catch (err) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+    }
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/mcp/doctor')) {
+    const body = await readJson(req)
+    try {
+      sendJson(res, 200, await doctorMcp(String(body.name ?? ''), String(body.cwd ?? '')))
+    } catch (err) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+    }
+    return
+  }
+
+  // 改动 MCP 配置后重启 agent，新的服务器才会被加载（和模型部署一样，进行中的生成会中断）。
+  const mcpWrite = async (run: () => Promise<void>) => {
+    try {
+      await run()
+    } catch (err) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+      return
+    }
+    let restartError: string | null = null
+    try {
+      await acp.restart()
+    } catch (err) {
+      restartError = err instanceof Error ? err.message : String(err)
+    }
+    sendJson(res, 200, { ok: true, restartError })
+  }
+
+  if (match(method, path, 'PUT', '/api/mcp')) {
+    const body = await readJson(req)
+    const cwd = String(body.cwd ?? '')
+    const server = (body.server ?? {}) as McpInput
+    const previous = typeof body.previousName === 'string' ? body.previousName : undefined
+    await mcpWrite(() => saveMcp(server, cwd, previous))
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/mcp/remove')) {
+    const body = await readJson(req)
+    await mcpWrite(() => removeMcp(String(body.name ?? ''), body.scope, String(body.cwd ?? '')))
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/mcp/enabled')) {
+    const body = await readJson(req)
+    await mcpWrite(() =>
+      setMcpEnabled(String(body.name ?? ''), body.enabled === true, String(body.cwd ?? '')),
+    )
+    return
+  }
+
   if (match(method, path, 'POST', '/api/open-external')) {
     const body = await readJson(req)
     const target = String(body.url ?? body.path ?? '')
@@ -467,6 +556,7 @@ async function handle(
     const created = await startTerminal(
       String(body.cwd ?? ''),
       requested || defaultShellId(shells),
+      { cols: Number(body.cols), rows: Number(body.rows) },
     )
     sendJson(res, 200, created)
     return
@@ -486,6 +576,14 @@ async function handle(
     return
   }
 
+  const termResize = match(method, path, 'POST', '/api/terminal/:id/resize')
+  if (termResize) {
+    const body = await readJson(req)
+    resizeTerminal(assertSafeSessionId(termResize.id), body.cols, body.rows)
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
   const termSig = match(method, path, 'POST', '/api/terminal/:id/signal')
   if (termSig) {
     interruptTerminal(assertSafeSessionId(termSig.id))
@@ -497,6 +595,74 @@ async function handle(
   if (termDel) {
     closeTerminal(assertSafeSessionId(termDel.id))
     sendJson(res, 200, { ok: true })
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/git/stage')) {
+    const body = await readJson(req)
+    await gitWrite(res, () =>
+      gitStage(String(body.path ?? ''), body.all ? null : String(body.file ?? '')),
+    )
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/git/unstage')) {
+    const body = await readJson(req)
+    await gitWrite(res, () =>
+      gitUnstage(String(body.path ?? ''), body.all ? null : String(body.file ?? '')),
+    )
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/git/discard')) {
+    const body = await readJson(req)
+    await gitWrite(res, () =>
+      gitDiscard(
+        String(body.path ?? ''),
+        String(body.file ?? ''),
+        typeof body.originalPath === 'string' ? body.originalPath : undefined,
+      ),
+    )
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/git/commit')) {
+    const body = await readJson(req)
+    await gitWrite(res, () =>
+      gitCommit(String(body.path ?? ''), String(body.message ?? '')),
+    )
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/fs/find')) {
+    const cwd = url.searchParams.get('cwd') || ''
+    const q = url.searchParams.get('q') || ''
+    const limit = Number(url.searchParams.get('limit') || 50)
+    try {
+      sendJson(res, 200, await findFiles(cwd, q, Number.isFinite(limit) ? limit : 50))
+    } catch (err) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+    }
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/search')) {
+    const q = (url.searchParams.get('q') || '').slice(0, 200)
+    sendJson(res, 200, { hits: await searchSessions(q) })
+    return
+  }
+
+  if (match(method, path, 'GET', '/api/usage')) {
+    const days = Number(url.searchParams.get('days') || 30)
+    sendJson(res, 200, await usageReport(Number.isFinite(days) ? days : 30))
+    return
+  }
+
+  const toolGet = match(method, path, 'GET', '/api/sessions/:id/tools/:toolId')
+  if (toolGet) {
+    const sessionId = assertSafeSessionId(toolGet.id)
+    const cwd = normalizePath(url.searchParams.get('cwd') || '') || homedir()
+    sendJson(res, 200, await toolDetail(cwd, sessionId, toolGet.toolId))
     return
   }
 
@@ -596,11 +762,14 @@ async function handle(
         mcpServers: [],
       })
       const diskTitle = await generatedTitleFromDisk(cwd, sessionId)
+      const extras = await sessionExtrasFromDisk(cwd, sessionId).catch(() => null)
+      if (extras) builder.applyExtras(extras)
       sendJson(res, 200, {
         sessionId,
         cwd: result._meta?.currentWorkingDirectory || cwd,
         title: builder.title || diskTitle,
         messages: builder.messages,
+        plan: builder.plan,
         config: Object.fromEntries(
           (result.configOptions ?? []).map((o) => [o.id, o.currentValue]),
         ),

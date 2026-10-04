@@ -1,8 +1,4 @@
-import {
-  spawn,
-  spawnSync,
-  type ChildProcessWithoutNullStreams,
-} from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join } from 'node:path'
@@ -289,11 +285,21 @@ type TermEvent =
   | { type: 'data'; text: string }
   | { type: 'exit'; code: number }
 
+// 终端进程的最小接口：伪终端（node-pty）和普通管道两种实现。
+type TermProc = {
+  write: (text: string) => void
+  kill: () => void
+  resize?: (cols: number, rows: number) => void
+}
+
+export type TermMode = 'pty' | 'pipe'
+
 type TermRec = {
   id: string
   cwd: string
   shellId: string
-  proc: ChildProcessWithoutNullStreams
+  mode: TermMode
+  proc: TermProc
   buffer: string
   listeners: Set<(ev: TermEvent) => void>
   exitCode: number | null
@@ -344,11 +350,36 @@ function emit(rec: TermRec, ev: TermEvent): void {
   for (const fn of rec.listeners) fn(ev)
 }
 
+type PtyModule = typeof import('node-pty')
+let ptyLoad: Promise<PtyModule | null> | null = null
+
+// node-pty 是原生模块（Windows / macOS 自带预编译包）。加载失败（例如 Linux 上没编译）
+// 就退回普通管道，终端仍能用，只是不支持交互式程序。
+function loadPty(): Promise<PtyModule | null> {
+  ptyLoad ??= import('node-pty')
+    .then((m) => {
+      const mod = m as unknown as PtyModule & { default?: PtyModule }
+      return mod.default ?? mod
+    })
+    .catch(() => null)
+  return ptyLoad
+}
+
+function clampSize(n: unknown, min: number, max: number, fallback: number): number {
+  const v = typeof n === 'number' && Number.isFinite(n) ? Math.round(n) : fallback
+  return Math.min(max, Math.max(min, v))
+}
+
 export async function startTerminal(
   cwd: string,
   shellId: string,
-): Promise<{ id: string; cwd: string; shellId: string; reused: boolean }> {
-  const dir = normalizeFsPath(cwd) || homedir()
+  size: { cols?: number; rows?: number } = {},
+): Promise<{ id: string; cwd: string; shellId: string; reused: boolean; mode: TermMode }> {
+  // 会话目录可能已经不存在（例如种子项目、被删掉的文件夹）：退回主目录打开，
+  // 否则 spawn 会因为 cwd 不存在报 ENOENT，看起来像是 shell 找不到。
+  const wanted = normalizeFsPath(cwd) || homedir()
+  const missing = !existsSync(wanted)
+  const dir = missing ? homedir() : wanted
   const key = termKey(dir, shellId)
   const existingId = byKey.get(key)
   const existing = existingId ? byId.get(existingId) : undefined
@@ -358,6 +389,7 @@ export async function startTerminal(
       cwd: existing.cwd,
       shellId: existing.shellId,
       reused: true,
+      mode: existing.mode,
     }
   }
 
@@ -372,62 +404,121 @@ export async function startTerminal(
 
   const args =
     shell.id === 'wsl' ? ['--cd', toWslPath(dir)] : shell.args
-  const proc = spawn(shell.command, args, {
-    cwd: dir,
-    windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      TERM: 'xterm-256color',
-      PYTHONIOENCODING: 'utf-8',
-    },
-  })
+  const env = {
+    ...process.env,
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    PYTHONIOENCODING: 'utf-8',
+  }
 
   const id = randomUUID()
   const rec: TermRec = {
     id,
     cwd: dir,
     shellId: shell.id,
-    proc,
+    mode: 'pipe',
+    proc: { write: () => undefined, kill: () => undefined },
     buffer: '',
     listeners: new Set(),
     exitCode: null,
   }
-  byId.set(id, rec)
-  byKey.set(key, id)
 
-  const onChunk = (buf: Buffer) => {
-    emit(rec, { type: 'data', text: buf.toString('utf8') })
-  }
-  proc.stdout.on('data', onChunk)
-  proc.stderr.on('data', onChunk)
-  proc.on('error', (err) => {
-    emit(rec, { type: 'data', text: `\r\n${err.message}\r\n` })
-  })
-  proc.on('close', (code) => {
-    rec.exitCode = code ?? 0
-    emit(rec, { type: 'exit', code: rec.exitCode })
+  const onExit = (code: number) => {
+    if (rec.exitCode != null) return
+    rec.exitCode = code
+    emit(rec, { type: 'exit', code })
     // byKey 释放（同目录可以再开），byId 留作重连回放，由 LRU 兜底淘汰。
     if (byKey.get(key) === id) byKey.delete(key)
     evictExitedRecords()
-  })
+  }
 
-  const banner = `当前目录 ${dir}\r\nShell: ${shell.label}\r\n\r\n`
+  const pty = await loadPty()
+  let started = false
+  if (pty) {
+    try {
+      const term = pty.spawn(shell.command, args, {
+        name: 'xterm-256color',
+        cols: clampSize(size.cols, 20, 500, 100),
+        rows: clampSize(size.rows, 5, 200, 30),
+        cwd: dir,
+        env,
+      })
+      rec.mode = 'pty'
+      rec.proc = {
+        write: (text) => term.write(text),
+        kill: () => term.kill(),
+        resize: (cols, rows) => term.resize(cols, rows),
+      }
+      term.onData((text) => emit(rec, { type: 'data', text }))
+      term.onExit(({ exitCode }) => onExit(exitCode ?? 0))
+      started = true
+    } catch {
+      started = false
+    }
+  }
+
+  if (!started) {
+    const proc = spawn(shell.command, args, {
+      cwd: dir,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    })
+    rec.mode = 'pipe'
+    rec.proc = {
+      write: (text) => {
+        proc.stdin.write(text, 'utf8')
+      },
+      kill: () => {
+        proc.kill()
+      },
+    }
+    const onChunk = (buf: Buffer) => {
+      emit(rec, { type: 'data', text: buf.toString('utf8') })
+    }
+    proc.stdout.on('data', onChunk)
+    proc.stderr.on('data', onChunk)
+    proc.on('error', (err) => {
+      emit(rec, { type: 'data', text: `\r\n${err.message}\r\n` })
+    })
+    proc.on('close', (code) => onExit(code ?? 0))
+  }
+
+  byId.set(id, rec)
+  byKey.set(key, id)
+
+  if (missing) {
+    emit(rec, { type: 'data', text: `\x1b[33m目录不存在：${wanted}，已在主目录打开\x1b[0m\r\n` })
+  }
+  const banner =
+    rec.mode === 'pty'
+      ? `\x1b[2m${shell.label} · ${dir}\x1b[0m\r\n`
+      : `当前目录 ${dir}\r\nShell: ${shell.label}（简易模式：不支持交互式程序）\r\n\r\n`
   emit(rec, { type: 'data', text: banner })
 
-  return { id, cwd: dir, shellId: shell.id, reused: false }
+  return { id, cwd: dir, shellId: shell.id, reused: false, mode: rec.mode }
 }
 
 export function writeTerminal(id: string, text: string): void {
   const rec = byId.get(id)
   if (!rec || rec.exitCode != null) throw new Error('终端已结束')
-  rec.proc.stdin.write(text, 'utf8')
+  rec.proc.write(text)
+}
+
+export function resizeTerminal(id: string, cols: unknown, rows: unknown): void {
+  const rec = byId.get(id)
+  if (!rec || rec.exitCode != null || !rec.proc.resize) return
+  try {
+    rec.proc.resize(clampSize(cols, 20, 500, 100), clampSize(rows, 5, 200, 30))
+  } catch {
+    // 进程刚退出时 resize 会抛错，忽略
+  }
 }
 
 export function interruptTerminal(id: string): void {
   const rec = byId.get(id)
   if (!rec || rec.exitCode != null) return
-  rec.proc.stdin.write('\u0003')
+  rec.proc.write('\u0003')
 }
 
 export function closeTerminal(id: string): void {
@@ -469,7 +560,7 @@ export function streamTerminal(
     const send = (obj: unknown) => {
       if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`)
     }
-    send({ type: 'history', text: rec.buffer })
+    send({ type: 'history', text: rec.buffer, mode: rec.mode })
     const onEv = (ev: TermEvent) => send(ev)
     rec.listeners.add(onEv)
     if (rec.exitCode != null) send({ type: 'exit', code: rec.exitCode })

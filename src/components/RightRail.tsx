@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import {
   IconClose,
   IconDiff,
@@ -13,7 +14,11 @@ import { useWorkspace } from '../workspace'
 import { FileExplorer } from './FileExplorer'
 import { ResizeHandle } from './ResizeHandle'
 import { ReviewPane } from './ReviewPane'
-import { TerminalPane } from './TerminalPane'
+
+// xterm 约 300 KB，只在打开终端标签时才加载。
+const TerminalPane = lazy(() =>
+  import('./TerminalPane').then((m) => ({ default: m.TerminalPane })),
+)
 
 function shortcuts() {
   const mod = modKeyLabel()
@@ -43,7 +48,18 @@ export function RightRail() {
     closeRightTab,
     addRightTab,
     closeRightRail,
-  } = useWorkspace()
+  } = useWorkspace(
+    'rightRailOpen',
+    'rightTabs',
+    'activeRightTabId',
+    'rightRailWidth',
+    'setRightPanel',
+    'setRightRailWidth',
+    'selectRightTab',
+    'closeRightTab',
+    'addRightTab',
+    'closeRightRail',
+  )
 
   if (!rightRailOpen) return null
 
@@ -147,7 +163,9 @@ export function RightRail() {
         ) : active.kind === 'review' ? (
           <ReviewPane />
         ) : active.kind === 'terminal' ? (
-          <TerminalPane />
+          <Suspense fallback={<p className="review-empty-line">正在加载终端…</p>}>
+            <TerminalPane />
+          </Suspense>
         ) : (
           <FileExplorer />
         )}

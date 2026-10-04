@@ -39,12 +39,28 @@ import {
   type SlashContext,
   type SlashOutcome,
 } from '../lib/slash'
+import { findFiles } from '../lib/fs'
+import { formatMarks } from '../lib/format'
+import { chatImagesToFiles } from '../lib/images'
 import { uid } from '../lib/uid'
 import { EFFORTS, MODELS, PERMISSION_MODES } from '../types'
 import type { ContextUsage } from '../types'
 import { useWorkspace } from '../workspace'
 import { Popover } from './Popover'
+import { MentionMenu } from './MentionMenu'
 import { SlashMenu } from './SlashMenu'
+
+// 光标前紧挨着的 `@xxx`（行首或空白之后）就是正在输入的文件引用。
+const MENTION_RE = /(^|\s)@([^\s@]*)$/
+
+function mentionAt(text: string, caret: number): { start: number; query: string } | null {
+  const m = MENTION_RE.exec(text.slice(0, caret))
+  if (!m) return null
+  return { start: caret - m[2].length - 1, query: m[2] }
+}
+
+// 「编辑后重发」的种子按 nonce 只用一次；Composer 按会话重挂载时不能再塞一遍。
+let consumedSeedNonce = 0
 
 type Attachment = {
   id: string
@@ -57,19 +73,6 @@ type Attachment = {
  * 第二次点击会看到「空草稿 + 生成中」而误当成暂停。这个窗口内忽略暂停请求。
  */
 const SEND_STOP_GRACE_MS = 400
-
-function formatMarks(n: number): string {
-  if (n < 1000) return String(Math.max(0, Math.round(n)))
-  if (n < 10_000) {
-    const k = n / 1000
-    const t = k.toFixed(1)
-    return `${t.endsWith('.0') ? t.slice(0, -2) : t}k`
-  }
-  if (n < 1_000_000) return `${Math.round(n / 1000)}k`
-  const m = n / 1_000_000
-  const t = m >= 10 ? String(Math.round(m)) : m.toFixed(1)
-  return `${t.endsWith('.0') ? t.slice(0, -2) : t}m`
-}
 
 function ContextRing({ usage }: { usage: ContextUsage | null }) {
   const used = usage?.used ?? 0
@@ -121,7 +124,13 @@ function extOf(name: string): string {
 }
 
 function ModelMenu({ close }: { close: () => void }) {
-  const { model, effort, setModel, setEffort, models } = useWorkspace()
+  const { model, effort, setModel, setEffort, models } = useWorkspace(
+    'model',
+    'effort',
+    'setModel',
+    'setEffort',
+    'models',
+  )
   const [effortOpen, setEffortOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const flyoutRef = useRef<HTMLDivElement>(null)
@@ -247,9 +256,45 @@ export function Composer() {
     notify,
     models,
     contextUsage,
-  } = useWorkspace()
+    sessionCwd,
+    composerSeed,
+  } = useWorkspace(
+    'composerProject',
+    'projects',
+    'permissionMode',
+    'model',
+    'effort',
+    'isThinking',
+    'send',
+    'enqueue',
+    'dropQueued',
+    'sendQueued',
+    'stopGeneration',
+    'outgoingQueue',
+    'activeSession',
+    'setMode',
+    'setModel',
+    'setEffort',
+    'setWorkspaceProject',
+    'setBranch',
+    'setProjectDialog',
+    'setSettingsOpen',
+    'newChat',
+    'deleteSession',
+    'renameSession',
+    'notify',
+    'models',
+    'contextUsage',
+    'sessionCwd',
+    'composerSeed',
+  )
 
   const [draft, setDraft] = useState('')
+  const [caret, setCaret] = useState(0)
+  const [mentionFiles, setMentionFiles] = useState<string[]>([])
+  const [mentionLoading, setMentionLoading] = useState(false)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [mentionDismissed, setMentionDismissed] = useState<number | null>(null)
   const [projectQuery, setProjectQuery] = useState('')
   const [files, setFiles] = useState<Attachment[]>([])
   const [dragging, setDragging] = useState(false)
@@ -294,6 +339,58 @@ export function Composer() {
         : 0
     ] ?? null
 
+  // `@` 优先在当前项目文件夹里找；不在项目里时才用会话目录。
+  const mentionRoot = composerProject?.path || sessionCwd
+  const mention = slashOpen ? null : mentionAt(draft, caret)
+  const mentionOpen = Boolean(mention && mentionRoot && mentionDismissed !== mention.start)
+  const mentionQuery = mentionOpen ? (mention?.query ?? '') : null
+
+  useEffect(() => {
+    if (mentionQuery == null || !mentionRoot) return
+    const ac = new AbortController()
+    const timer = window.setTimeout(() => {
+      setMentionLoading(true)
+      void findFiles(mentionRoot, mentionQuery, 30, ac.signal)
+        .then((r) => {
+          setMentionFiles(r.files)
+          setMentionIndex(0)
+        })
+        .catch(() => {
+          if (!ac.signal.aborted) setMentionFiles([])
+        })
+        .finally(() => {
+          if (!ac.signal.aborted) setMentionLoading(false)
+        })
+    }, 120)
+    return () => {
+      ac.abort()
+      window.clearTimeout(timer)
+    }
+  }, [mentionQuery, mentionRoot])
+
+  useEffect(() => {
+    if (!mentionOpen) return
+    document.getElementById(`mention-${mentionIndex}`)?.scrollIntoView({ block: 'nearest' })
+  }, [mentionOpen, mentionIndex])
+
+  function acceptMention(rel: string) {
+    if (!mention) return
+    const quoted = /\s/.test(rel) ? `"${rel}"` : rel
+    const before = draft.slice(0, mention.start)
+    const after = draft.slice(caret)
+    const insert = `@${quoted} `
+    const next = before + insert + after.replace(/^\S*/, '')
+    const pos = before.length + insert.length
+    setDraft(next)
+    setCaret(pos)
+    requestAnimationFrame(() => {
+      const el = areaRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(pos, pos)
+    })
+  }
+
   function setSlashIndex(index: number) {
     setSlashNav({ key: menuKey, index })
   }
@@ -310,6 +407,23 @@ export function Composer() {
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`
   }, [draft])
+
+  useEffect(() => {
+    if (!composerSeed || composerSeed.nonce === consumedSeedNonce) return
+    consumedSeedNonce = composerSeed.nonce
+    setDraft(composerSeed.text)
+    setCaret(composerSeed.text.length)
+    void chatImagesToFiles(composerSeed.images)
+      .then((list) => addFilesRef.current(list))
+      .catch(() => undefined)
+    requestAnimationFrame(() => {
+      const el = areaRef.current
+      if (!el) return
+      el.focus()
+      const n = el.value.length
+      el.setSelectionRange(n, n)
+    })
+  }, [composerSeed])
 
   useEffect(() => {
     return () => {
@@ -403,6 +517,11 @@ export function Composer() {
     })
   }
 
+  const addFilesRef = useRef(addFiles)
+  useEffect(() => {
+    addFilesRef.current = addFiles
+  })
+
   function removeFile(id: string) {
     setFiles((prev) => {
       const hit = prev.find((f) => f.id === id)
@@ -413,6 +532,8 @@ export function Composer() {
 
   function clearDraft() {
     setDraft('')
+    setCaret(0)
+    setMentionDismissed(null)
     files.forEach((f) => {
       if (f.preview) URL.revokeObjectURL(f.preview)
     })
@@ -507,6 +628,29 @@ export function Composer() {
 
   function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.nativeEvent.isComposing || e.key === 'Process') return
+    if (mentionOpen && mention) {
+      const n = mentionFiles.length
+      if (e.key === 'ArrowDown' && n) {
+        e.preventDefault()
+        setMentionIndex((mentionIndex + 1) % n)
+        return
+      }
+      if (e.key === 'ArrowUp' && n) {
+        e.preventDefault()
+        setMentionIndex((mentionIndex - 1 + n) % n)
+        return
+      }
+      if ((e.key === 'Tab' || e.key === 'Enter') && n && !e.shiftKey) {
+        e.preventDefault()
+        acceptMention(mentionFiles[Math.min(mentionIndex, n - 1)])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMentionDismissed(mention.start)
+        return
+      }
+    }
     if (slashOpen) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -633,6 +777,15 @@ export function Composer() {
         </div>
       ) : null}
       <div className="composer-stack">
+        {mentionOpen ? (
+          <MentionMenu
+            files={mentionFiles}
+            activeIndex={mentionIndex}
+            loading={mentionLoading}
+            onHover={setMentionIndex}
+            onPick={acceptMention}
+          />
+        ) : null}
         {slashOpen ? (
           <SlashMenu
             groups={slashGroups}
@@ -875,18 +1028,24 @@ export function Composer() {
           ref={areaRef}
           rows={1}
           value={draft}
-          placeholder="随心输入"
+          placeholder="随心输入，@ 引用文件"
           onChange={(e) => {
             setDraft(e.target.value)
+            setCaret(e.target.selectionStart ?? e.target.value.length)
             setSlashDismissed(null)
           }}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           onKeyDown={onKey}
           role="combobox"
           aria-autocomplete="list"
-          aria-expanded={slashOpen}
-          aria-controls="slash-menu"
+          aria-expanded={slashOpen || mentionOpen}
+          aria-controls={mentionOpen ? 'mention-menu' : 'slash-menu'}
           aria-activedescendant={
-            slashOpen && activeSlash ? `slash-${activeSlash.id}` : undefined
+            mentionOpen && mentionFiles.length
+              ? `mention-${mentionIndex}`
+              : slashOpen && activeSlash
+                ? `slash-${activeSlash.id}`
+                : undefined
           }
         />
         <div className="composer-bar">

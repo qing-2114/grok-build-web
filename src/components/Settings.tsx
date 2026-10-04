@@ -1,12 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
-import { IconCheck, IconChevron, IconCpu, IconSliders, IconUser } from '../icons'
+import {
+  IconBox,
+  IconChart,
+  IconCheck,
+  IconChevron,
+  IconCpu,
+  IconSliders,
+  IconUser,
+} from '../icons'
+import { notificationPermission } from '../lib/notify'
 import { fetchShells, type ShellInfo } from '../lib/fs'
 import { initials, readAvatarFile } from '../lib/profile'
 import { useWorkspace } from '../workspace'
+import type { SettingsPage } from '../workspace-state'
 import { ModelDeploy } from './ModelDeploy'
 import { Popover } from './Popover'
-
-type SettingsPage = 'general' | 'deploy' | 'profile'
+import { McpSettings } from './McpSettings'
+import { UsagePanel } from './UsagePanel'
 
 export function Settings() {
   const {
@@ -16,16 +26,31 @@ export function Settings() {
     notify,
     terminalShellId,
     setTerminalShell,
-  } = useWorkspace()
-  const [page, setPage] = useState<SettingsPage>('general')
+    settingsPage,
+    notifyDone,
+    setNotifyDone,
+  } = useWorkspace(
+    'profile',
+    'setProfile',
+    'setSettingsOpen',
+    'notify',
+    'terminalShellId',
+    'setTerminalShell',
+    'settingsPage',
+    'notifyDone',
+    'setNotifyDone',
+  )
+  // App 用 settingsPage 做 key：命令面板在设置已打开时跳页会重新挂载，这里只取初值。
+  const [page, setPage] = useState<SettingsPage>(settingsPage)
+  const permission = notificationPermission()
   const [name, setName] = useState(profile.name)
   const [avatar, setAvatar] = useState(profile.avatar)
   const [shells, setShells] = useState<ShellInfo[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
   // 模型部署页把「有未保存的修改」写在这里，离开这一页前确认一次。
   const deployDirtyRef = useRef(false)
-  // 上下文里的 setter / 值每次 provider 渲染都会换新引用（每个流式 token 都会换），
-  // 所以只读一次 /api/shells：把最新的 setter 和当前值放进 ref，挂载时拉一次即可。
+  // /api/shells 在服务端会阻塞，只在挂载时拉一次：用户切换 Shell 会改
+  // terminalShellId，但不应因此重拉，所以把当前值和 setter 放进 ref。
   const setTerminalShellRef = useRef(setTerminalShell)
   const terminalShellRef = useRef(terminalShellId)
   useEffect(() => {
@@ -132,6 +157,30 @@ export function Settings() {
           <button
             type="button"
             className={
+              page === 'mcp'
+                ? 'settings-nav-item is-active'
+                : 'settings-nav-item'
+            }
+            onClick={() => goPage('mcp')}
+          >
+            <IconBox />
+            MCP 服务器
+          </button>
+          <button
+            type="button"
+            className={
+              page === 'usage'
+                ? 'settings-nav-item is-active'
+                : 'settings-nav-item'
+            }
+            onClick={() => goPage('usage')}
+          >
+            <IconChart />
+            用量统计
+          </button>
+          <button
+            type="button"
+            className={
               page === 'profile'
                 ? 'settings-nav-item is-active'
                 : 'settings-nav-item'
@@ -198,7 +247,42 @@ export function Settings() {
                   )}
                 </Popover>
               </div>
+
+              <div className="settings-row">
+                <div className="settings-row-copy">
+                  <h3>完成提醒</h3>
+                  <p>
+                    页面不在前台、或者在看别的会话时，回复完成或等待批准会发系统通知，标签页标题也会显示待处理数。
+                    {notifyDone && permission === 'denied'
+                      ? ' 浏览器已拒绝通知，请在地址栏左侧的网站设置里允许。'
+                      : ''}
+                    {notifyDone && permission === 'unsupported' ? ' 这个浏览器不支持系统通知。' : ''}
+                  </p>
+                </div>
+                <div className="deploy-toggle" role="group" aria-label="完成提醒">
+                  <button
+                    type="button"
+                    className={notifyDone ? 'deploy-flag is-on' : 'deploy-flag'}
+                    aria-pressed={notifyDone}
+                    onClick={() => setNotifyDone(true)}
+                  >
+                    开
+                  </button>
+                  <button
+                    type="button"
+                    className={!notifyDone ? 'deploy-flag is-off' : 'deploy-flag'}
+                    aria-pressed={!notifyDone}
+                    onClick={() => setNotifyDone(false)}
+                  >
+                    关
+                  </button>
+                </div>
+              </div>
             </section>
+          ) : page === 'usage' ? (
+            <UsagePanel />
+          ) : page === 'mcp' ? (
+            <McpSettings />
           ) : page === 'deploy' ? (
             <ModelDeploy dirtyRef={deployDirtyRef} />
           ) : (

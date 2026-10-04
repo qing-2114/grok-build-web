@@ -17,7 +17,7 @@ const PERMISSION_MODES: PermissionMode[] = [
   'always-approve',
 ]
 const EFFORT_LEVELS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh']
-const DEFAULT_MODEL = 'grok-4.6'
+export const DEFAULT_MODEL = 'grok-4.7'
 const DEFAULT_SHELL = 'powershell'
 
 export type Persisted = {
@@ -33,6 +33,7 @@ export type Persisted = {
   terminalShellId?: string
   sidebarWidth?: number
   rightRailWidth?: number
+  notifyDone?: boolean
 }
 
 function asText(value: unknown): string {
@@ -131,6 +132,7 @@ export function loadState(): Persisted | null {
       terminalShellId: asText(parsed.terminalShellId).trim() || DEFAULT_SHELL,
       sidebarWidth: normaliseWidth(parsed.sidebarWidth),
       rightRailWidth: normaliseWidth(parsed.rightRailWidth),
+      notifyDone: parsed.notifyDone !== false,
     }
   } catch {
     return null
@@ -154,3 +156,4 @@ export function clearState(): void {
   lastSerialised = ''
   localStorage.removeItem(STORAGE_KEY)
 }
+

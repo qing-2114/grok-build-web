@@ -513,3 +513,103 @@ export async function streamRaw(
     })
   })
 }
+
+// ---- @ 引用 / 命令面板用的文件搜索 ----
+
+const FIND_SCAN_LIMIT = 20_000
+const FIND_CACHE_MS = 15_000
+const findCache = new Map<string, { at: number; files: string[] }>()
+
+// 查找时额外跳过的大目录：虚拟环境、构建产物、Windows 用户目录里的缓存。
+// 点开头的目录（.conda / .venv / .idea …）一律不进，只放行 .github。
+const FIND_SKIP_DIRS = new Set([
+  ...SKIP_DIRS,
+  'venv',
+  'env',
+  'site-packages',
+  'target',
+  'build',
+  'out',
+  'AppData',
+  'Library',
+  'Application Data',
+])
+
+function skipForFind(name: string): boolean {
+  if (FIND_SKIP_DIRS.has(name)) return true
+  return name.startsWith('.') && name !== '.github'
+}
+
+// 按层遍历：浅层文件先收进来，某个很深的大目录也不会把扫描配额吃光。
+async function listFilesUnder(root: string): Promise<string[]> {
+  const hit = findCache.get(root)
+  if (hit && Date.now() - hit.at < FIND_CACHE_MS) return hit.files
+  const files: string[] = []
+  let scanned = 0
+  let level = [root]
+  for (let depth = 0; depth <= 12 && level.length && scanned < FIND_SCAN_LIMIT; depth++) {
+    const next: string[] = []
+    for (const dir of level) {
+      if (scanned >= FIND_SCAN_LIMIT) break
+      let items
+      try {
+        items = await readdir(dir, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const it of items) {
+        if (scanned >= FIND_SCAN_LIMIT) break
+        scanned += 1
+        if (it.isDirectory()) {
+          if (!skipForFind(it.name)) next.push(resolve(dir, it.name))
+        } else if (it.isFile()) {
+          files.push(relative(root, resolve(dir, it.name)).replace(/\\/g, '/'))
+        }
+      }
+    }
+    level = next
+  }
+  findCache.set(root, { at: Date.now(), files })
+  if (findCache.size > 16) {
+    const oldest = [...findCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]
+    if (oldest) findCache.delete(oldest[0])
+  }
+  return files
+}
+
+function fileScore(rel: string, needle: string): number {
+  const lower = rel.toLowerCase()
+  const base = lower.slice(lower.lastIndexOf('/') + 1)
+  if (!needle) return 1000 - rel.split('/').length * 10 - rel.length / 100
+  if (base === needle) return 3000 - rel.length
+  if (base.startsWith(needle)) return 2500 - rel.length
+  if (base.includes(needle)) return 2000 - rel.length
+  if (lower.includes(needle)) return 1500 - rel.length
+  // 子序列匹配：`wsst` 也能找到 workspace-state.ts
+  let i = 0
+  for (const ch of lower) {
+    if (ch === needle[i]) i += 1
+    if (i === needle.length) return 500 - rel.length
+  }
+  return -1
+}
+
+export async function findFiles(
+  cwd: string,
+  query: string,
+  limit = 50,
+): Promise<{ root: string; files: string[] }> {
+  const root = normalizeFsPath(cwd)
+  if (!root) throw new Error('缺少路径')
+  const st = await stat(root).catch(() => null)
+  if (!st?.isDirectory()) throw new Error('不是文件夹')
+  const needle = query.trim().toLowerCase().replace(/\\/g, '/')
+  const all = await listFilesUnder(root)
+  const scored: Array<[number, string]> = []
+  for (const rel of all) {
+    const s = fileScore(rel, needle)
+    if (s >= 0) scored.push([s, rel])
+  }
+  scored.sort((a, b) => b[0] - a[0] || a[1].localeCompare(b[1]))
+  return { root, files: scored.slice(0, Math.max(1, Math.min(limit, 200))).map((x) => x[1]) }
+}

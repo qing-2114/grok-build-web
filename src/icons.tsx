@@ -667,3 +667,66 @@ export function IconEyeOff(props: IconProps) {
     </Svg>
   )
 }
+
+export function IconRetry(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M12.6 7.2A4.7 4.7 0 1 0 11.4 11"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      <path
+        d="M12.8 3.6v3.6H9.2"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  )
+}
+
+export function IconDownload(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M8 2.8v7.4M5 7.4 8 10.4l3-3M3.2 12.8h9.6"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  )
+}
+
+export function IconList(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M6 4.4h7M6 8h7M6 11.6h7"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      <circle cx="3.4" cy="4.4" r=".9" fill="currentColor" />
+      <circle cx="3.4" cy="8" r=".9" fill="currentColor" />
+      <circle cx="3.4" cy="11.6" r=".9" fill="currentColor" />
+    </Svg>
+  )
+}
+
+export function IconChart(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        d="M3 13h10M4.8 10.6V8M8 10.6V4.4M11.2 10.6V6.6"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </Svg>
+  )
+}

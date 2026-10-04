@@ -29,7 +29,10 @@ function validOptions(raw: PermissionRequest['options']): PermissionOption[] {
 }
 
 export function PermissionDialog() {
-  const { permissionRequest, resolvePermission } = useWorkspace()
+  const { permissionRequest, resolvePermission } = useWorkspace(
+    'permissionRequest',
+    'resolvePermission',
+  )
   const resolveRef = useRef(resolvePermission)
   useEffect(() => {
     resolveRef.current = resolvePermission

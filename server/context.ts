@@ -8,7 +8,7 @@ export type ContextUsage = {
   percent: number
 }
 
-function grokHome(): string {
+export function grokHome(): string {
   return process.env.GROK_HOME?.trim() || join(homedir(), '.grok')
 }
 
@@ -31,7 +31,7 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
-async function findSessionDir(
+export async function findSessionDir(
   cwd: string,
   sessionId: string,
 ): Promise<string | null> {

@@ -30,3 +30,16 @@ export async function filesToChatImages(files: File[]): Promise<ChatImage[]> {
   }
   return out
 }
+
+/** 重试 / 编辑重发时把已发出的图片（data URL）还原成 File。 */
+export async function chatImagesToFiles(images: ChatImage[] | undefined): Promise<File[]> {
+  if (!images?.length) return []
+  return Promise.all(
+    images.map(async (img) => {
+      const blob = await (await fetch(img.src)).blob()
+      return new File([blob], img.name || `image-${img.n}.png`, {
+        type: img.mime || blob.type,
+      })
+    }),
+  )
+}

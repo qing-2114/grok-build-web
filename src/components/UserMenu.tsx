@@ -6,7 +6,7 @@ import { useWorkspace } from '../workspace'
 import { AboutDialog } from './AboutDialog'
 
 export function UserMenu() {
-  const { profile, setSettingsOpen } = useWorkspace()
+  const { profile, setSettingsOpen } = useWorkspace('profile', 'setSettingsOpen')
   const [open, setOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)

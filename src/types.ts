@@ -17,6 +17,22 @@ export type ChatImage = {
   src: string
 }
 
+export type TurnUsage = {
+  input: number
+  output: number
+  cached: number
+  reasoning: number
+  total: number
+  calls: number
+  elapsedMs: number
+}
+
+export type PlanEntry = {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+  priority?: string
+}
+
 export type Message = {
   id: string
   role: Role
@@ -24,6 +40,8 @@ export type Message = {
   createdAt: number
   tool?: ToolCall
   images?: ChatImage[]
+  /** 这一轮结束时 agent 报告的用量，挂在本轮最后一段助手回复上 */
+  usage?: TurnUsage
 }
 
 export type Project = {
@@ -48,6 +66,8 @@ export type Session = {
   updatedAt: number
   messages: Message[]
   source?: 'local' | 'grok'
+  /** agent 最近一次推送的计划清单 */
+  plan?: PlanEntry[]
 }
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'error'

@@ -1,6 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { IconDiff } from '../icons'
-import { fetchGitChanges, fetchGitDiff, type GitChange } from '../lib/fs'
+import {
+  fetchGitChanges,
+  fetchGitDiff,
+  gitCommit,
+  gitDiscard,
+  gitStage,
+  gitUnstage,
+  type GitChange,
+} from '../lib/fs'
 import { looksLikeFilePath } from '../lib/paths'
 import { useWorkspace } from '../workspace'
 import { PathLink } from './PathLink'
@@ -43,7 +51,16 @@ export function ReviewPane() {
     openLocalFile,
     openExternalUrl,
     revealInExplorer,
-  } = useWorkspace()
+    notify,
+  } = useWorkspace(
+    'sessionCwd',
+    'activeSession',
+    'isThinking',
+    'openLocalFile',
+    'openExternalUrl',
+    'revealInExplorer',
+    'notify',
+  )
   const [files, setFiles] = useState<GitChange[]>([])
   const [isRepo, setIsRepo] = useState(true)
   const [branch, setBranch] = useState('')
@@ -53,6 +70,49 @@ export function ReviewPane() {
   const [loading, setLoading] = useState(false)
   const diffGen = useRef(0)
   const lastScope = useRef('')
+  const [reloadKey, setReloadKey] = useState(0)
+  const [busyPath, setBusyPath] = useState<string | null>(null)
+  // 撤销会丢掉改动：第一次点只进入确认态，3 秒内再点才执行。
+  const [confirmPath, setConfirmPath] = useState<string | null>(null)
+  const [message, setMessage] = useState('')
+  const [committing, setCommitting] = useState(false)
+
+  useEffect(() => {
+    if (!confirmPath) return
+    const t = window.setTimeout(() => setConfirmPath(null), 3000)
+    return () => window.clearTimeout(t)
+  }, [confirmPath])
+
+  const reload = useCallback(() => setReloadKey((k) => k + 1), [])
+
+  async function runOp(key: string, op: () => Promise<unknown>, done?: string) {
+    setBusyPath(key)
+    try {
+      await op()
+      if (done) notify(done, 'success')
+    } catch (err) {
+      notify(err instanceof Error ? err.message : '操作失败', 'error')
+    } finally {
+      setBusyPath(null)
+      reload()
+    }
+  }
+
+  async function commit() {
+    const msg = message.trim()
+    if (!msg || committing) return
+    setCommitting(true)
+    try {
+      const { sha } = await gitCommit(sessionCwd, msg)
+      setMessage('')
+      notify(`已提交 ${sha}`, 'success')
+    } catch (err) {
+      notify(err instanceof Error ? err.message : '提交失败', 'error')
+    } finally {
+      setCommitting(false)
+      reload()
+    }
+  }
 
   const mentioned = useMemo(() => {
     const seen = new Set<string>()
@@ -108,7 +168,9 @@ export function ReviewPane() {
     // 只在会话 / 工作目录变化，以及一轮生成开始和结束时刷新。
     // 不能依赖 activeSession.updatedAt：流式事件每个 token 都会改它，
     // 那样每来一个字都会重跑 git status。
-  }, [sessionCwd, activeSession?.id, isThinking])
+  }, [sessionCwd, activeSession?.id, isThinking, reloadKey])
+
+  const stagedCount = files.filter((f) => f.staged).length
 
   async function toggleFile(file: GitChange) {
     if (openPath === file.path) {
@@ -162,9 +224,55 @@ export function ReviewPane() {
       ) : null}
 
       {files.length > 0 ? (
+        <div className="review-commit">
+          <textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder={stagedCount ? `提交说明（已暂存 ${stagedCount} 个文件）` : '提交说明（先暂存要提交的文件）'}
+            rows={2}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault()
+                void commit()
+              }
+            }}
+          />
+          <div className="review-commit-bar">
+            <button
+              type="button"
+              className="text-btn"
+              disabled={busyPath != null}
+              onClick={() => void runOp('*', () => gitStage(sessionCwd, null))}
+            >
+              全部暂存
+            </button>
+            {stagedCount ? (
+              <button
+                type="button"
+                className="text-btn"
+                disabled={busyPath != null}
+                onClick={() => void runOp('*', () => gitUnstage(sessionCwd, null))}
+              >
+                全部取消暂存
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn-solid review-commit-btn"
+              disabled={!message.trim() || !stagedCount || committing}
+              onClick={() => void commit()}
+            >
+              {committing ? '正在提交…' : '提交'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {files.length > 0 ? (
         <ul className="review-list">
           {files.map((f) => (
             <li key={f.path}>
+              <div className="review-row">
               <button
                 type="button"
                 className={
@@ -176,7 +284,57 @@ export function ReviewPane() {
                   {STATUS_LABEL[f.status]}
                 </span>
                 <span className="review-path">{f.path}</span>
+                {f.staged ? (
+                  <span className={f.unstaged ? 'review-staged is-partial' : 'review-staged'}>
+                    {f.unstaged ? '部分暂存' : '已暂存'}
+                  </span>
+                ) : null}
               </button>
+              <div className="review-ops">
+                {f.staged && !f.unstaged ? (
+                  <button
+                    type="button"
+                    disabled={busyPath != null}
+                    onClick={() => void runOp(f.path, () => gitUnstage(sessionCwd, f.path))}
+                  >
+                    取消暂存
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busyPath != null}
+                    onClick={() => void runOp(f.path, () => gitStage(sessionCwd, f.path))}
+                  >
+                    暂存
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={confirmPath === f.path ? 'is-danger is-confirm' : 'is-danger'}
+                  disabled={busyPath != null}
+                  onClick={() => {
+                    if (confirmPath !== f.path) {
+                      setConfirmPath(f.path)
+                      return
+                    }
+                    setConfirmPath(null)
+                    void runOp(
+                      f.path,
+                      () => gitDiscard(sessionCwd, f),
+                      f.status === 'untracked' || f.status === 'added'
+                        ? `已删除 ${f.path}`
+                        : `已撤销 ${f.path}`,
+                    )
+                  }}
+                >
+                  {confirmPath === f.path
+                    ? f.status === 'untracked' || f.status === 'added'
+                      ? '确认删除'
+                      : '确认撤销'
+                    : '撤销'}
+                </button>
+              </div>
+              </div>
               {openPath === f.path ? (
                 <div className="review-diff">
                   <button

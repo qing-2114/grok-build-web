@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
+import { rm } from 'node:fs/promises'
 import { platform } from 'node:os'
-import { resolve } from 'node:path'
+import { isAbsolute, relative, resolve } from 'node:path'
 
 function runGit(cwd: string, args: string[]): Promise<{ code: number; out: string; err: string }> {
   return new Promise((resolvePromise) => {
@@ -142,6 +143,10 @@ export type GitChange = {
   path: string
   originalPath?: string
   status: 'modified' | 'added' | 'deleted' | 'untracked' | 'renamed'
+  /** 索引里有这一项的改动（`git add` 过） */
+  staged: boolean
+  /** 工作区里还有没暂存的改动 */
+  unstaged: boolean
 }
 
 export async function gitChanges(path: string): Promise<{
@@ -184,6 +189,8 @@ export async function gitChanges(path: string): Promise<{
       path: filePath,
       originalPath,
       status,
+      staged: x !== ' ' && x !== '?',
+      unstaged: y !== ' ',
     })
   }
   return { isRepo: true, branch: info.branch, files }
@@ -231,4 +238,99 @@ export async function gitFileDiff(
     patch = `${patch.slice(0, 200_000)}\n…`
   }
   return { path: rel, patch }
+}
+
+// ---- 审查面板的写操作 ----
+// 文件参数一律放在 `--` 之后，并要求解析后仍在仓库根目录里；
+// 不接受以 `-` 开头的名字，免得被当成选项。
+
+async function repoRoot(path: string): Promise<string> {
+  const cwd = normalizePath(path)
+  if (!cwd) throw new Error('缺少路径')
+  const top = await runGit(cwd, ['rev-parse', '--show-toplevel'])
+  if (top.code !== 0) throw new Error('不是 git 仓库')
+  return normalizePath(top.out.trim())
+}
+
+export function assertRepoFile(root: string, file: string): string {
+  const rel = file.trim().replace(/\\/g, '/')
+  if (!rel) throw new Error('缺少文件')
+  if (rel.startsWith('-')) throw new Error('文件名不能以 - 开头')
+  if (isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) throw new Error('只接受仓库内的相对路径')
+  for (const ch of rel) {
+    const code = ch.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) throw new Error('文件名包含非法字符')
+  }
+  const abs = resolve(root, rel)
+  const back = relative(root, abs)
+  if (!back || back.startsWith('..') || isAbsolute(back)) {
+    throw new Error('文件不在仓库内')
+  }
+  return rel
+}
+
+async function mustGit(cwd: string, args: string[], what: string): Promise<string> {
+  const r = await runGit(cwd, args)
+  if (r.code !== 0) throw new Error(r.err.trim() || r.out.trim() || `${what}失败`)
+  return r.out
+}
+
+export async function gitStage(path: string, file: string | null): Promise<void> {
+  const root = await repoRoot(path)
+  if (file == null) {
+    await mustGit(root, ['add', '-A'], '暂存')
+    return
+  }
+  await mustGit(root, ['add', '--', assertRepoFile(root, file)], '暂存')
+}
+
+export async function gitUnstage(path: string, file: string | null): Promise<void> {
+  const root = await repoRoot(path)
+  const hasHead = (await runGit(root, ['rev-parse', '--verify', '-q', 'HEAD'])).code === 0
+  const target = file == null ? '.' : assertRepoFile(root, file)
+  if (hasHead) {
+    await mustGit(root, ['restore', '--staged', '--', target], '取消暂存')
+  } else {
+    await mustGit(root, ['rm', '--cached', '-r', '-q', '--', target], '取消暂存')
+  }
+}
+
+async function inHead(root: string, rel: string): Promise<boolean> {
+  return (await runGit(root, ['cat-file', '-e', `HEAD:${rel}`])).code === 0
+}
+
+/**
+ * 把文件恢复成 HEAD 里的样子。HEAD 里没有的文件（未跟踪 / 新增）会被删除，
+ * 重命名会同时恢复原路径、删掉新路径。调用方必须先让用户确认。
+ */
+export async function gitDiscard(
+  path: string,
+  file: string,
+  originalPath?: string,
+): Promise<void> {
+  const root = await repoRoot(path)
+  const rel = assertRepoFile(root, file)
+  const orig = originalPath ? assertRepoFile(root, originalPath) : null
+  if (orig && (await inHead(root, orig))) {
+    await mustGit(root, ['restore', '--source=HEAD', '--staged', '--worktree', '--', orig], '撤销')
+  }
+  if (await inHead(root, rel)) {
+    await mustGit(root, ['restore', '--source=HEAD', '--staged', '--worktree', '--', rel], '撤销')
+    return
+  }
+  await runGit(root, ['rm', '--cached', '-q', '--ignore-unmatch', '--', rel])
+  await rm(resolve(root, rel), { force: true })
+}
+
+export async function gitCommit(path: string, message: string): Promise<{ sha: string }> {
+  const root = await repoRoot(path)
+  const msg = message.replace(/\r\n/g, '\n').trim()
+  if (!msg) throw new Error('请填写提交说明')
+  if (msg.length > 8000) throw new Error('提交说明过长')
+  const staged = await runGit(root, ['diff', '--cached', '--quiet'])
+  if (staged.code === 0) throw new Error('没有已暂存的更改')
+  // spawn 不经过 shell，说明作为单个参数传入，不会被解释。
+  await mustGit(root, ['commit', '-q', '-m', msg], '提交')
+  const sha = (await mustGit(root, ['rev-parse', '--short', 'HEAD'], '提交')).trim()
+  return { sha }
 }

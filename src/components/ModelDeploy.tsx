@@ -73,7 +73,7 @@ export function ModelDeploy({
 }: {
   dirtyRef?: RefObject<boolean>
 }) {
-  const { notify, refreshAgent } = useWorkspace()
+  const { notify, refreshAgent } = useWorkspace('notify', 'refreshAgent')
   const [providers, setProviders] = useState<DeployProvider[]>([])
   const [baseline, setBaseline] = useState('[]')
   const [persisted, setPersisted] = useState<Set<string>>(() => new Set())

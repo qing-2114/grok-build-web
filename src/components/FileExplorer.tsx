@@ -100,7 +100,14 @@ export function FileExplorer() {
     openExternalUrl,
     revealInExplorer,
     notify,
-  } = useWorkspace()
+  } = useWorkspace(
+    'sessionCwd',
+    'previewPath',
+    'setPreviewPath',
+    'openExternalUrl',
+    'revealInExplorer',
+    'notify',
+  )
   const [filter, setFilter] = useState('')
   const [root, setRoot] = useState<FsEntry[]>([])
   const [childrenMap, setChildrenMap] = useState<Map<string, FsEntry[]>>(

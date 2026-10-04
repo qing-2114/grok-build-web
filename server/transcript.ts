@@ -1,4 +1,12 @@
+import { turnUsageFrom, type SessionExtras, type TurnUsage } from './session-index.ts'
+
 export type ToolStatus = 'running' | 'success' | 'failed'
+
+export type PlanEntry = {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+  priority?: string
+}
 
 export type WireMessage = {
   id: string
@@ -6,6 +14,7 @@ export type WireMessage = {
   content: string
   createdAt: number
   tool?: { name: string; target: string; status: ToolStatus }
+  usage?: TurnUsage
 }
 
 export type StreamEvent =
@@ -24,9 +33,15 @@ export type StreamEvent =
   | { type: 'done'; stopReason: string }
   | { type: 'error'; message: string }
   | { type: 'usage'; used: number }
+  | { type: 'plan'; entries: PlanEntry[] }
+  | { type: 'turn'; usage: TurnUsage; stopReason: string }
 
 type AcpUpdate = {
   sessionUpdate?: string
+  entries?: unknown
+  usage?: unknown
+  elapsed_ms?: unknown
+  stop_reason?: unknown
   content?: { type?: string; text?: string }
   title?: string
   toolCallId?: string
@@ -110,6 +125,31 @@ export function updateToEvent(update: AcpUpdate): StreamEvent | null {
         status: toolStatus(update),
       }
     }
+    case 'plan': {
+      const entries = Array.isArray(update.entries) ? update.entries : []
+      return {
+        type: 'plan',
+        entries: entries
+          .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+          .map((e) => ({
+            content: String(e.content ?? ''),
+            status:
+              e.status === 'completed' || e.status === 'in_progress'
+                ? e.status
+                : 'pending',
+            priority: typeof e.priority === 'string' ? e.priority : undefined,
+          })),
+      }
+    }
+    case 'turn_completed': {
+      const usage = turnUsageFrom(update as Record<string, unknown>)
+      if (!usage) return null
+      return {
+        type: 'turn',
+        usage,
+        stopReason: String(update.stop_reason ?? ''),
+      }
+    }
     case 'session_info_update':
       if (update.title) return { type: 'title', title: String(update.title) }
       return null
@@ -121,6 +161,7 @@ export function updateToEvent(update: AcpUpdate): StreamEvent | null {
 export class TranscriptBuilder {
   messages: WireMessage[] = []
   title = ''
+  plan: PlanEntry[] = []
 
   applyUpdate(update: AcpUpdate): void {
     const ev = updateToEvent(update)
@@ -132,6 +173,40 @@ export class TranscriptBuilder {
     else if (ev.type === 'text') this.append('assistant', ev.text)
     else if (ev.type === 'tool') this.upsertTool(ev)
     else if (ev.type === 'title') this.title = ev.title
+    else if (ev.type === 'plan') this.plan = ev.entries
+    else if (ev.type === 'turn') {
+      // 只挂到本轮（最后一条用户消息之后）的最后一段助手回复上。
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        const m = this.messages[i]
+        if (m.role === 'user') break
+        if (m.role === 'assistant') {
+          m.usage = ev.usage
+          break
+        }
+      }
+    }
+  }
+
+  /** 把磁盘上读到的回合用量和计划补进回放结果（ACP 回放里没有这两样）。 */
+  applyExtras(extras: SessionExtras): void {
+    if (extras.plan.length && !this.plan.length) this.plan = extras.plan
+    if (!extras.usageByPrompt.size) return
+    let prompt = -1
+    let lastAssistant: WireMessage | null = null
+    const flush = () => {
+      const usage = extras.usageByPrompt.get(prompt)
+      if (lastAssistant && usage && !lastAssistant.usage) lastAssistant.usage = usage
+    }
+    for (const m of this.messages) {
+      if (m.role === 'user') {
+        flush()
+        prompt += 1
+        lastAssistant = null
+      } else if (m.role === 'assistant') {
+        lastAssistant = m
+      }
+    }
+    flush()
   }
 
   private append(role: 'user' | 'assistant', text: string): void {

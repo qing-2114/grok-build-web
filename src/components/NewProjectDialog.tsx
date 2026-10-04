@@ -5,7 +5,10 @@ import { isWindowsPlatform } from '../lib/platform'
 import { useWorkspace } from '../workspace'
 
 export function NewProjectDialog() {
-  const { projectDialogOpen, setProjectDialog } = useWorkspace()
+  const { projectDialogOpen, setProjectDialog } = useWorkspace(
+    'projectDialogOpen',
+    'setProjectDialog',
+  )
   if (!projectDialogOpen) return null
   return <ProjectForm onClose={() => setProjectDialog(false)} />
 }
@@ -17,7 +20,13 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
     editingProjectId,
     projects,
     notify,
-  } = useWorkspace()
+  } = useWorkspace(
+    'addProject',
+    'updateProject',
+    'editingProjectId',
+    'projects',
+    'notify',
+  )
   const editing = projects.find((p) => p.id === editingProjectId) ?? null
   const [name, setName] = useState(editing?.name ?? '')
   const [path, setPath] = useState(editing?.path ?? '')

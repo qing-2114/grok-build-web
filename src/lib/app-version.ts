@@ -15,6 +15,8 @@ export type AppVersionInfo = {
   dirty: boolean
   behind: number
   ahead: number
+  updateMode: 'git' | 'installer'
+  downloadUrl: string
   canUpdate: boolean
   error: string | null
   checkedAt: string
@@ -25,6 +27,7 @@ export type AppUpdateResult = {
   localVersion: string
   remoteVersion: string
   npmInstall: boolean
+  relaunching: boolean
 }
 
 async function parseJson<T>(res: Response): Promise<T> {
@@ -46,21 +49,9 @@ export async function updateApp(): Promise<AppUpdateResult> {
   return parseJson<AppUpdateResult>(res)
 }
 
-function parseVer(v: string): [number, number, number] | null {
-  const m = v.trim().replace(/^v/i, '').match(/^(\d+)\.(\d+)\.(\d+)/)
-  if (!m) return null
-  return [Number(m[1]), Number(m[2]), Number(m[3])]
-}
+import { cmpVersion } from './semver'
 
-export function cmpVersion(local: string, remote: string): number {
-  const a = parseVer(local)
-  const b = parseVer(remote)
-  if (!a || !b) return 0
-  for (let i = 0; i < 3; i++) {
-    if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1
-  }
-  return 0
-}
+export { cmpVersion }
 
 export function shortSha(sha: string): string {
   return sha.slice(0, 7)
@@ -80,6 +71,24 @@ export function versionStatus(info: AppVersionInfo): {
 } {
   const ver = cmpVersion(info.localVersion, info.remoteVersion)
   const newerRemote = ver < 0 || info.behind > 0
+
+  if (info.updateMode === 'installer') {
+    if (info.error && !info.remoteVersion) {
+      return { text: info.error, kind: 'error' }
+    }
+    if (ver < 0 && info.remoteVersion) {
+      if (!info.downloadUrl) {
+        return {
+          text: `有新版本 ${info.remoteVersion}，但还没有 Windows 安装包`,
+          kind: 'warn',
+        }
+      }
+      return { text: `有新版本 ${info.remoteVersion}`, kind: 'update' }
+    }
+    if (ver > 0) return { text: '本地版本号新于 GitHub', kind: 'warn' }
+    if (info.error) return { text: info.error, kind: 'error' }
+    return { text: '已是最新', kind: 'ok' }
+  }
 
   if (!info.isRepo) {
     return {

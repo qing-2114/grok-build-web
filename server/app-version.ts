@@ -1,12 +1,20 @@
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, readFileSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
+import { Readable } from 'node:stream'
+import { cmpVersion } from '../src/lib/semver.ts'
+import { pickInstallerAsset, tagVersion, type ReleaseAsset } from './release.ts'
 
 export const PUBLIC_REPO_URL = 'https://github.com/qing-2114/grok-build-web'
 export const PUBLIC_REPO_GIT = `${PUBLIC_REPO_URL}.git`
 export const TRACK_BRANCH = 'main'
 const UPSTREAM_REF = 'refs/gbw-upstream/main'
+const RELEASES_LATEST =
+  'https://api.github.com/repos/qing-2114/grok-build-web/releases/latest'
 
 export const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -27,6 +35,9 @@ export type AppVersionInfo = {
   dirty: boolean
   behind: number
   ahead: number
+  /** git：开发仓快进。installer：已打包的桌面端下载安装包。 */
+  updateMode: 'git' | 'installer'
+  downloadUrl: string
   canUpdate: boolean
   error: string | null
   checkedAt: string
@@ -37,6 +48,8 @@ export type AppUpdateResult = {
   localVersion: string
   remoteVersion: string
   npmInstall: boolean
+  /** 安装包已启动，应用即将退出并由安装程序接手。 */
+  relaunching: boolean
 }
 
 let updateLock: Promise<AppUpdateResult> | null = null
@@ -236,13 +249,88 @@ async function fetchRemoteHttp(): Promise<{
   }
 }
 
+export function isPackagedApp(): boolean {
+  return process.env.GROK_WEB_PACKAGED === '1'
+}
+
+type GithubRelease = {
+  tag_name?: string
+  html_url?: string
+  body?: string
+  assets?: ReleaseAsset[]
+}
+
+async function fetchLatestRelease(): Promise<{
+  version: string
+  notes: string
+  pageUrl: string
+  asset: { name: string; url: string; size: number } | null
+  error: string | null
+}> {
+  try {
+    const res = await fetch(RELEASES_LATEST, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'grok-build-web',
+      },
+      signal: AbortSignal.timeout(12_000),
+    })
+    if (res.status === 404) {
+      return {
+        version: '',
+        notes: '',
+        pageUrl: '',
+        asset: null,
+        error: 'GitHub 上还没有安装包',
+      }
+    }
+    if (!res.ok) {
+      return {
+        version: '',
+        notes: '',
+        pageUrl: '',
+        asset: null,
+        error: `GitHub 返回 ${res.status}`,
+      }
+    }
+    const data = (await res.json()) as GithubRelease
+    const version = tagVersion(data.tag_name ?? '')
+    return {
+      version,
+      notes: (data.body ?? '').split(/\r?\n/)[0]?.trim() ?? '',
+      pageUrl: data.html_url?.trim() ?? '',
+      asset: pickInstallerAsset(data.assets),
+      error: null,
+    }
+  } catch (err) {
+    return {
+      version: '',
+      notes: '',
+      pageUrl: '',
+      asset: null,
+      error: err instanceof Error ? err.message : '无法连接 GitHub',
+    }
+  }
+}
+
 function blockReason(info: {
   isRepo: boolean
   dirty: boolean
   ahead: number
   behind: number
   error: string | null
+  updateMode: 'git' | 'installer'
+  localVersion: string
+  remoteVersion: string
+  downloadUrl: string
 }): string | null {
+  if (info.updateMode === 'installer') {
+    if (info.error && !info.remoteVersion) return info.error
+    if (!info.remoteVersion) return info.error || '拉不到 GitHub 版本'
+    if (cmpVersion(info.localVersion, info.remoteVersion) >= 0) return '已是最新'
+    if (!info.downloadUrl) return '有新版本，但 Release 里没有 Windows 安装包'
+    return null
+  }
   if (!info.isRepo) return '当前目录不是 git 仓库，无法自动更新'
   if (info.error && info.behind === 0) return info.error
   if (info.dirty) return '有未提交的本地改动，无法自动更新'
@@ -266,20 +354,41 @@ export async function readAppVersion(): Promise<AppVersionInfo> {
     dirty: false,
     behind: 0,
     ahead: 0,
+    updateMode: isPackagedApp() ? 'installer' : 'git',
+    downloadUrl: '',
     canUpdate: false,
     error: null,
     checkedAt,
   }
 
+  if (base.updateMode === 'installer') {
+    const release = await fetchLatestRelease()
+    const info = {
+      ...base,
+      remoteVersion: release.version,
+      remote: release.version
+        ? {
+            sha: '',
+            date: '',
+            subject: release.notes || release.version,
+          }
+        : null,
+      downloadUrl: release.asset?.url ?? '',
+      error: release.error,
+    }
+    return { ...info, canUpdate: blockReason(info) == null }
+  }
+
   const repo = await isGitRepo()
   if (!repo) {
     const http = await fetchRemoteHttp()
-    return {
+    const info = {
       ...base,
       remoteVersion: http.version,
       remote: http.commit,
       error: http.error,
     }
+    return { ...info, canUpdate: blockReason(info) == null }
   }
 
   const [local, dirty] = await Promise.all([localCommit(), isDirty()])
@@ -341,12 +450,56 @@ function readText(path: string): string {
   }
 }
 
+async function downloadInstaller(url: string, dest: string): Promise<void> {
+  const res = await fetch(url, {
+    headers: {
+      Accept: 'application/octet-stream',
+      'User-Agent': 'grok-build-web',
+    },
+    signal: AbortSignal.timeout(300_000),
+    redirect: 'follow',
+  })
+  if (!res.ok || !res.body) {
+    throw new Error(`下载安装包失败（${res.status}）`)
+  }
+  await pipeline(Readable.fromWeb(res.body), createWriteStream(dest))
+}
+
+async function applyInstaller(before: AppVersionInfo): Promise<AppUpdateResult> {
+  const dir = await mkdtemp(join(tmpdir(), 'grok-build-setup-'))
+  const file = join(dir, 'Grok-Build-Setup.exe')
+  try {
+    await downloadInstaller(before.downloadUrl, file)
+  } catch (err) {
+    await rm(dir, { recursive: true, force: true })
+    throw err
+  }
+  const proc = spawn(file, ['/S'], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  proc.unref()
+  setTimeout(() => {
+    process.exit(0)
+  }, 400)
+  return {
+    ok: true,
+    localVersion: before.localVersion,
+    remoteVersion: before.remoteVersion,
+    npmInstall: false,
+    relaunching: true,
+  }
+}
+
 export async function updateApp(): Promise<AppUpdateResult> {
   if (updateLock) return updateLock
   const job = (async () => {
     const before = await readAppVersion()
     const reason = blockReason(before)
     if (reason) throw new Error(reason)
+
+    if (before.updateMode === 'installer') return applyInstaller(before)
 
     const pkgPath = join(APP_ROOT, 'package.json')
     const lockPath = join(APP_ROOT, 'package-lock.json')
@@ -371,6 +524,7 @@ export async function updateApp(): Promise<AppUpdateResult> {
       localVersion: after.localVersion || before.remoteVersion,
       remoteVersion: after.remoteVersion || before.remoteVersion,
       npmInstall: needNpm,
+      relaunching: false,
     }
   })()
   updateLock = job

@@ -30,6 +30,7 @@ import {
   type AgentModel,
   type PromptFile,
 } from './lib/agent'
+import { isAbsoluteFolderPath, relativeFolderMessage } from './lib/folder'
 import { looksLikeHtml, isWebUrl } from './lib/paths'
 import { loadState, saveState, type Persisted } from './lib/storage'
 import { displayTitle } from './lib/title'
@@ -540,6 +541,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           : project?.path || snap.homeDir
       if (!cwd) {
         notify('请先选择项目文件夹', 'error')
+        return false
+      }
+      // 旧项目可能只存了浏览器回传的文件夹名。相对路径会被接到工作台目录。
+      if (session.source !== 'grok' && !isAbsoluteFolderPath(cwd)) {
+        notify(relativeFolderMessage(cwd), 'error')
+        dispatch({ type: 'set-project-dialog', open: true, editId: project?.id })
         return false
       }
 

@@ -383,7 +383,7 @@ def main() -> None:
     log(f"已创建：{lnk}")
 
     log("\n完成。")
-    log("双击桌面上的「Grok Build」即可启动本机操作台（http://127.0.0.1:5173/）。")
+    log("双击桌面上的「Grok Build」即可打开桌面窗口（仍使用这个快捷方式的图标）。")
 
 
 if __name__ == "__main__":

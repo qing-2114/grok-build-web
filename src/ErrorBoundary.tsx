@@ -8,9 +8,9 @@ const BTN = {
   fontSize: 13,
   padding: '6px 14px',
   borderRadius: 8,
-  border: '1px solid #3a3a3e',
+  border: '1px solid #ffffff',
   background: 'transparent',
-  color: '#f4f1ea',
+  color: '#ffffff',
   cursor: 'pointer',
 } as const
 
@@ -28,19 +28,19 @@ export class ErrorBoundary extends Component<Props, State> {
           style={{
             minHeight: '100%',
             padding: 32,
-            color: '#f4f1ea',
-            background: '#070708',
+            color: '#ffffff',
+            background: '#000000',
             fontFamily: 'Segoe UI, sans-serif',
           }}
         >
           <h1 style={{ fontSize: 18 }}>界面出错</h1>
-          <pre style={{ whiteSpace: 'pre-wrap', color: '#e07a7a' }}>
+          <pre style={{ whiteSpace: 'pre-wrap', color: '#ff8d8d' }}>
             {this.state.error.message}
           </pre>
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button
               type="button"
-              style={{ ...BTN, background: '#f4f1ea', color: '#111112' }}
+              style={{ ...BTN, background: '#ffffff', color: '#000000' }}
               onClick={() => this.setState({ error: null })}
             >
               重试

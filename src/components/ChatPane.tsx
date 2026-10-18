@@ -10,12 +10,14 @@ import {
   IconSidebar,
 } from '../icons'
 import { formatDuration, formatMarks } from '../lib/format'
+import { foldBefore } from '../lib/turns'
 import { looksLikeFilePath } from '../lib/paths'
 import { stripImageTokens } from '../lib/images'
 import { displayTitle } from '../lib/title'
 import type { ChatImage, Message, ToolCall, TurnUsage } from '../types'
 import { useWorkspace } from '../workspace'
 import { Composer } from './Composer'
+import { GrokCliBanner } from './GrokCliBanner'
 import { PathLink } from './PathLink'
 import { PlanCard } from './PlanCard'
 import { RichText } from './RichText'
@@ -299,12 +301,14 @@ export function ChatPane() {
   const prevSession = useRef<string | undefined>(undefined)
   const prevCount = useRef(0)
   const [showJump, setShowJump] = useState(false)
+  const [openTurns, setOpenTurns] = useState<ReadonlySet<string>>(() => new Set())
 
   useEffect(() => {
     const id = activeSession?.id
     if (id !== prevSession.current) {
       prevSession.current = id
       prevCount.current = messages.length
+      setOpenTurns(new Set())
       const el = threadRef.current
       if (el) el.scrollTop = 0
       setShowJump(false)
@@ -361,24 +365,26 @@ export function ChatPane() {
     }
   }
 
-  function renderTurns() {
-    const nodes: ReactNode[] = []
-    let i = 0
-    while (i < messages.length) {
+  function toggleTurn(id: string) {
+    setOpenTurns((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function renderSlice(from: number, to: number, into: ReactNode[]) {
+    let i = from
+    while (i < to) {
       const m = messages[i]
-      if (m.role === 'user') {
-        nodes.push(<UserPrompt key={m.id} message={m} onEdit={editMessage} />)
-        nodes.push(<hr key={`${m.id}-split`} className="turn-split" />)
-        i += 1
-        continue
-      }
       if (m.role === 'tool') {
         const tools: Message[] = []
-        while (i < messages.length && messages[i].role === 'tool') {
+        while (i < to && messages[i].role === 'tool') {
           tools.push(messages[i])
           i += 1
         }
-        nodes.push(
+        into.push(
           <ChangeCard
             key={tools[0].id}
             tools={tools}
@@ -391,7 +397,7 @@ export function ChatPane() {
         )
         continue
       }
-      nodes.push(
+      into.push(
         <article key={m.id} className="doc-turn">
           <RichText
             text={m.content}
@@ -438,11 +444,57 @@ export function ChatPane() {
       )
       i += 1
     }
+  }
+
+  function renderTurns() {
+    const nodes: ReactNode[] = []
+    let i = 0
+    while (i < messages.length) {
+      const m = messages[i]
+      if (m.role === 'user') {
+        nodes.push(<UserPrompt key={m.id} message={m} onEdit={editMessage} />)
+        nodes.push(<hr key={`${m.id}-split`} className="turn-split" />)
+        i += 1
+        continue
+      }
+      const start = i
+      let end = i
+      while (end < messages.length && messages[end].role !== 'user') end += 1
+      const live = isThinking && end === messages.length
+      const foldAt = live ? null : foldBefore(messages, start, end)
+      if (foldAt != null) {
+        const turnId =
+          start > 0 && messages[start - 1].role === 'user'
+            ? messages[start - 1].id
+            : messages[start].id
+        const open = openTurns.has(turnId)
+        const elapsed = messages[foldAt].usage?.elapsedMs ?? 0
+        const label = elapsed ? `用时 ${formatDuration(elapsed)}` : '查看过程'
+        nodes.push(
+          <button
+            key={`${turnId}-fold`}
+            type="button"
+            className={open ? 'turn-fold is-open' : 'turn-fold'}
+            aria-expanded={open}
+            onClick={() => toggleTurn(turnId)}
+          >
+            <span>{label}</span>
+            <IconChevron />
+          </button>,
+        )
+        if (open) renderSlice(start, foldAt, nodes)
+        renderSlice(foldAt, end, nodes)
+      } else {
+        renderSlice(start, end, nodes)
+      }
+      i = end
+    }
     return nodes
   }
 
   return (
     <main className="stage">
+      <GrokCliBanner />
       {empty ? (
         <>
           <header className={mobileNavOpen ? 'stage-top is-hidden' : 'stage-top'}>
@@ -556,7 +608,6 @@ export function ChatPane() {
                   <span className="who-mark">
                     <img src="/grok-icon.png" alt="" />
                   </span>
-                  <span className="caret" />
                   <span className="thinking-label">正在载入会话</span>
                 </div>
               ) : null}
@@ -565,7 +616,6 @@ export function ChatPane() {
                   <span className="who-mark">
                     <img src="/grok-icon.png" alt="" />
                   </span>
-                  <span className="caret" />
                   <span className="thinking-label">正在思考</span>
                 </div>
               ) : null}

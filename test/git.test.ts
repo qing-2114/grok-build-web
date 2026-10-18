@@ -5,7 +5,14 @@ import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import test from 'node:test'
-import { gitFileDiff, gitInfo, normalizePath, samePath } from '../server/git.ts'
+import {
+  assertExistingDirectory,
+  gitFileDiff,
+  gitInfo,
+  isAbsoluteInputPath,
+  normalizePath,
+  samePath,
+} from '../server/git.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -15,6 +22,35 @@ test('normalizePath preserves the platform-native absolute path', () => {
 
   assert.equal(actual, expected)
   if (sep === '/') assert.equal(actual.includes('\\'), false)
+})
+
+test('isAbsoluteInputPath rejects a bare folder name', () => {
+  assert.equal(isAbsoluteInputPath('公众号写作'), false)
+  assert.equal(isAbsoluteInputPath('folder'), false)
+  assert.equal(isAbsoluteInputPath(''), false)
+  if (sep === '\\') {
+    assert.equal(isAbsoluteInputPath('F:\\公众号写作'), true)
+    assert.equal(isAbsoluteInputPath('F:/公众号写作'), true)
+  } else {
+    assert.equal(isAbsoluteInputPath('/tmp/公众号写作'), true)
+  }
+})
+
+test('assertExistingDirectory refuses a relative folder before touching the agent', async () => {
+  await assert.rejects(
+    assertExistingDirectory('公众号写作'),
+    /不是完整路径/,
+  )
+})
+
+test('assertExistingDirectory accepts a real directory and rejects a missing one', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'grok-build-web-cwd-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  assert.equal(await assertExistingDirectory(dir), resolve(dir))
+  await assert.rejects(
+    assertExistingDirectory(join(dir, 'missing-child')),
+    /找不到文件夹/,
+  )
 })
 
 test('samePath follows the host file system case semantics', () => {

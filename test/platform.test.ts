@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { isAbsoluteFolderPath } from '../src/lib/folder.ts'
 import { fileManagerName, isApplePlatform, modKeyLabel } from '../src/lib/platform.ts'
 
 test('modKeyLabel and file manager name follow the host platform', () => {
@@ -9,4 +10,12 @@ test('modKeyLabel and file manager name follow the host platform', () => {
   assert.equal(modKeyLabel('Win32'), 'Ctrl')
   assert.equal(fileManagerName('Win32'), '资源管理器')
   assert.equal(fileManagerName('Linux x86_64'), '文件管理器')
+})
+
+test('isAbsoluteFolderPath rejects the leaf name a browser folder picker returns', () => {
+  assert.equal(isAbsoluteFolderPath('公众号写作'), false)
+  assert.equal(isAbsoluteFolderPath('F:\\公众号写作'), true)
+  assert.equal(isAbsoluteFolderPath('F:/公众号写作'), true)
+  assert.equal(isAbsoluteFolderPath('/home/user/公众号写作'), true)
+  assert.equal(isAbsoluteFolderPath('\\\\server\\share'), true)
 })

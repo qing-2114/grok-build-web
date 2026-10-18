@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { IconClose, IconFolder } from '../icons'
-import { folderNameFromPath, pickLocalFolder } from '../lib/folder'
+import { pickNativeFolder } from '../lib/fs'
+import { folderNameFromPath, isAbsoluteFolderPath, pickLocalFolder } from '../lib/folder'
 import { isWindowsPlatform } from '../lib/platform'
 import { useWorkspace } from '../workspace'
 
@@ -30,6 +31,8 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
   const editing = projects.find((p) => p.id === editingProjectId) ?? null
   const [name, setName] = useState(editing?.name ?? '')
   const [path, setPath] = useState(editing?.path ?? '')
+  const [pathError, setPathError] = useState('')
+  const [picking, setPicking] = useState(false)
   const nameId = useId()
   const pathId = useId()
   const firstRef = useRef<HTMLInputElement>(null)
@@ -53,17 +56,33 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
   }, [])
 
   async function browse() {
+    setPicking(true)
+    setPathError('')
     try {
+      if (isWindowsPlatform()) {
+        const native = await pickNativeFolder(isAbsoluteFolderPath(path) ? path : '')
+        if (!native) return
+        setPath(native)
+        setName((prev) => prev || folderNameFromPath(native))
+        return
+      }
       const picked = await pickLocalFolder()
       if (picked === 'aborted') return
       if (picked === 'unsupported') {
         notify('当前浏览器不支持文件夹选择，请手动填写路径')
         return
       }
-      setPath((prev) => prev || picked.pathHint)
+      if (!isAbsoluteFolderPath(path)) {
+        setPath('')
+        setPathError(
+          `已选中「${picked.name}」。浏览器拿不到完整路径，请填写以 / 开头的路径。`,
+        )
+      }
       setName((prev) => prev || picked.name)
-    } catch {
-      notify('无法打开文件夹选择器')
+    } catch (err) {
+      notify(err instanceof Error ? err.message : '无法打开文件夹选择器', 'error')
+    } finally {
+      setPicking(false)
     }
   }
 
@@ -75,17 +94,27 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
       firstRef.current?.focus()
       return
     }
+    if (!nextPath || !isAbsoluteFolderPath(nextPath)) {
+      const leaf = nextPath || nextName
+      setPathError(
+        isWindowsPlatform()
+          ? `请填写完整路径。只写「${leaf}」会被接到工作台目录下，文件夹实际并不在那里。例如 F:\\${leaf}`
+          : `请填写以 / 开头的完整路径。只写「${leaf}」会被接到工作台目录下。`,
+      )
+      document.getElementById(pathId)?.focus()
+      return
+    }
     if (editing) {
       updateProject({
         id: editing.id,
         name: nextName,
-        path: nextPath || editing.path,
+        path: nextPath,
       })
       return
     }
     addProject({
       name: nextName,
-      path: nextPath || nextName,
+      path: nextPath,
     })
   }
 
@@ -117,8 +146,8 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
         </header>
         <p className="dialog-lead">
           {editing
-            ? '可以改名称或工作文件夹。浏览器只能拿到文件夹名，完整路径请再确认一次。'
-            : '选择本机文件夹作为工作区。浏览器只能拿到文件夹名，完整路径请再确认一次。'}
+            ? '可以改名称或工作文件夹。点浏览会打开系统文件夹窗口，并填入完整路径。'
+            : '选择本机文件夹作为工作区。点浏览会打开系统文件夹窗口，并填入完整路径。'}
         </p>
         <label className="field" htmlFor={nameId}>
           <span>项目名称</span>
@@ -140,8 +169,11 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
               onChange={(e) => {
                 const v = e.target.value
                 setPath(v)
+                setPathError('')
                 if (!name) setName(folderNameFromPath(v))
               }}
+              aria-invalid={pathError ? true : undefined}
+              aria-describedby={pathError ? `${pathId}-error` : undefined}
               placeholder={
                 isWindowsPlatform()
                   ? '例如 F:\\your-project'
@@ -150,11 +182,16 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
               autoComplete="off"
               spellCheck={false}
             />
-            <button type="button" className="btn-ghost" onClick={browse}>
+            <button type="button" className="btn-ghost" onClick={browse} disabled={picking}>
               <IconFolder />
-              浏览
+              {picking ? '选择中' : '浏览'}
             </button>
           </div>
+          {pathError ? (
+            <span id={`${pathId}-error`} className="field-error" role="alert">
+              {pathError}
+            </span>
+          ) : null}
         </label>
         <footer className="dialog-foot">
           <button type="button" className="btn-ghost" onClick={onClose}>

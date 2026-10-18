@@ -690,6 +690,59 @@ function revealInExplorerWin(target: string): void {
   }, 300)
 }
 
+function windowsPowerShell(): string {
+  return (
+    findOnPath('powershell.exe') ||
+    join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  )
+}
+
+// 网页的文件夹选择器不回传盘符。本机服务用系统对话框拿完整路径。
+export function pickFolder(start = ''): Promise<string | null> {
+  if (process.platform !== 'win32') {
+    return Promise.reject(new Error('当前系统没有本机文件夹对话框'))
+  }
+  const ps = windowsPowerShell()
+  if (!existsSync(ps)) {
+    return Promise.reject(new Error('找不到 PowerShell，无法打开文件夹对话框'))
+  }
+  return new Promise((resolvePromise, reject) => {
+    const script = join(dirname(fileURLToPath(import.meta.url)), 'pick-folder.ps1')
+    const proc = spawn(
+      ps,
+      ['-NoProfile', '-STA', '-WindowStyle', 'Minimized', '-ExecutionPolicy', 'Bypass', '-File', script],
+      {
+        // windowsHide 会把文件夹窗口藏进不可见桌面，用户点不到。最小化只藏控制台。
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, GROK_PICK_START: start },
+      },
+    )
+    let out = ''
+    let err = ''
+    proc.stdout.setEncoding('utf8')
+    proc.stderr.setEncoding('utf8')
+    proc.stdout.on('data', (chunk: string) => {
+      out += chunk
+    })
+    proc.stderr.on('data', (chunk: string) => {
+      err += chunk
+    })
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      if (code === 2) {
+        resolvePromise(null)
+        return
+      }
+      const picked = out.trim()
+      if (code === 0 && picked) {
+        resolvePromise(picked)
+        return
+      }
+      reject(new Error(err.trim() || '无法打开文件夹对话框'))
+    })
+  })
+}
+
 export function revealInExplorer(path: string, cwd = ''): void {
   const abs = absFrom(path, cwd)
   if (!abs) throw new Error('路径无效')

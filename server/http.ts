@@ -9,6 +9,7 @@ import {
   gitCommit,
   gitDiscard,
   gitFileDiff,
+  assertExistingDirectory,
   gitInfo,
   gitStage,
   gitUnstage,
@@ -29,6 +30,7 @@ import {
   openExternal,
   openLocalHtml,
   resizeTerminal,
+  pickFolder,
   revealInExplorer,
   startTerminal,
   streamTerminal,
@@ -56,6 +58,7 @@ import {
   type StreamEvent,
 } from './transcript.ts'
 import { readAppVersion, updateApp } from './app-version.ts'
+import { installGrokCli, readGrokCli, updateGrokCli } from './grok-cli.ts'
 import {
   doctorMcp,
   listMcp,
@@ -310,6 +313,33 @@ async function handle(
     return
   }
 
+  if (match(method, path, 'GET', '/api/grok/cli')) {
+    sendJson(res, 200, await readGrokCli())
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/grok/install')) {
+    try {
+      sendJson(res, 200, await installGrokCli())
+    } catch (err) {
+      sendJson(res, 400, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/grok/update')) {
+    try {
+      sendJson(res, 200, await updateGrokCli())
+    } catch (err) {
+      sendJson(res, 400, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    return
+  }
+
   if (match(method, path, 'GET', '/api/git')) {
     const p = url.searchParams.get('path') || ''
     const info = await gitInfo(p)
@@ -343,6 +373,14 @@ async function handle(
     const p = url.searchParams.get('path') || ''
     const file = url.searchParams.get('file') || ''
     sendJson(res, 200, await gitFileDiff(p, file))
+    return
+  }
+
+  if (match(method, path, 'POST', '/api/fs/pick-folder')) {
+    const body = await readJson(req)
+    const start = String(body.start ?? '')
+    const picked = await pickFolder(start)
+    sendJson(res, 200, { path: picked })
     return
   }
 
@@ -700,7 +738,7 @@ async function handle(
 
   if (match(method, path, 'POST', '/api/sessions')) {
     const body = await readJson(req)
-    const cwd = normalizePath(String(body.cwd ?? '')) || homedir()
+    const cwd = await assertExistingDirectory(String(body.cwd ?? ''))
     const created = await acp.request<{
       sessionId: string
       models?: { currentModelId?: string }

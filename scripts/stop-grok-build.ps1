@@ -1,7 +1,13 @@
-﻿# Stops the background Grok Build web console started by open-grok-build.ps1.
+﻿# Stops the Grok Build desktop window started by open-grok-build.ps1.
+# Also stops a leftover browser-mode server still listening on port 5173.
 # Double-click scripts\stop-grok-build.cmd (a .ps1 does not run on double-click).
 $ErrorActionPreference = 'Stop'
 $Port = 5173
+if ($env:LOCALAPPDATA) {
+  $PidFile = Join-Path $env:LOCALAPPDATA 'grok-build-web\desktop.pid'
+} else {
+  $PidFile = Join-Path $env:TEMP 'grok-build-web\desktop.pid'
+}
 
 function Show-Notice([string]$Text, [int]$Icon = 64) {
   $shell = New-Object -ComObject WScript.Shell
@@ -38,8 +44,21 @@ function Get-LegacyNote {
   return "`n`n另有一个旧的 Grok Build 命令行窗口还开着（PID $($ids -join ', ')），关掉它即可。"
 }
 
-$pids = Get-ListenPids $Port
+$pids = @(Get-ListenPids $Port)
 $killed = @()
+
+if (Test-Path -LiteralPath $PidFile) {
+  $raw = (Get-Content -LiteralPath $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+  $desktopPid = 0
+  if ([int]::TryParse([string]$raw, [ref]$desktopPid)) {
+    $desktop = Get-Process -Id $desktopPid -ErrorAction SilentlyContinue
+    if ($desktop) {
+      taskkill /PID $desktopPid /T /F 2>&1 | Out-Null
+      $killed += $desktopPid
+    }
+  }
+  Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+}
 
 foreach ($procId in $pids) {
   $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
@@ -69,5 +88,5 @@ if (Get-ListenPids $Port) {
   exit 1
 }
 
-Show-Notice ("已停止 Grok Build 服务（端口 $Port）。再开桌面快捷方式即可重新启动。" + $legacyNote) 64
+Show-Notice ("已停止 Grok Build。再开桌面快捷方式即可重新启动。" + $legacyNote) 64
 exit 0

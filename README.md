@@ -4,7 +4,23 @@
 
 `npm run dev` 会拉起 `grok agent --no-leader stdio`，通过 ACP 把流式回复、工具调用、项目目录和 git 分支接到浏览器。
 
-## 一键安装
+## Windows 安装包
+
+给不打算编译源码的用户：下载 GitHub Release 里的 `Grok-Build-Setup-<版本>.exe`，双击安装。安装程序会放到当前用户目录，并在桌面和开始菜单放「Grok Build」快捷方式。不需要安装 Node，也不需要 clone 仓库。
+
+装好后如果本机没有 Grok Build CLI，空状态会给出「一键安装」（官方脚本 `https://x.ai/cli/install.ps1`）。CLI 有新版本时，顶栏下方和关于页都会提示更新。
+
+关于页的「检查更新」对比 GitHub 最新 Release。有新的安装包时点「更新到最新」，下载后静默安装并关闭当前窗口，装完从开始菜单重新打开。项目、设置和 `~/.grok` 都在用户目录，不会被安装程序清掉。
+
+开发者打安装包（本机需要 Node 20+ 和 [NSIS](https://nsis.sourceforge.io/) 的 `makensis`）：
+
+```text
+npm run pack:win
+```
+
+产物在 `release/Grok-Build-Setup-<版本>.exe`。发版时把它作为附件传到与 `package.json` 版本对应的 GitHub Release（标签 `v` + 版本号）。
+
+## 从源码安装
 
 需要 [Python 3](https://www.python.org/) 和 [Node.js](https://nodejs.org/) 20+。在仓库根目录执行：
 
@@ -25,11 +41,11 @@ py -3 grok-build-web-install.py
 3. 在本仓库执行 `npm install`
 4. 在桌面创建「Grok Build」快捷方式（Windows：`.lnk` 指向 `scripts/open-grok-build.ps1`；macOS / Linux：`Grok Build.command`）
 
-完成后双击桌面快捷方式即可启动操作台（`http://127.0.0.1:5173/`）。自定义模型可在设置 → **模型部署** 里填请求地址和 API Key，不必先 `grok login`。
+完成后双击桌面快捷方式即可打开独立桌面窗口。窗口仍用这份快捷方式的图标（`public/grok-icon.ico`），项目和设置与原来的 `http://127.0.0.1:5173/` 共用。自定义模型可在设置 → **模型部署** 里填请求地址和 API Key，不必先 `grok login`。
 
 ### 交给智能体（100 字以内）
 
-> 克隆 https://github.com/qing-2114/grok-build-web.git ，在仓库根目录运行 python grok-build-web-install.py。脚本会检查或安装 Grok Build、确认 Node 20+、执行 npm install，并在桌面创建快捷方式。
+> 到 https://github.com/qing-2114/grok-build-web/releases/latest 下载 Grok-Build-Setup 安装包并安装。打开后若提示未安装 Grok Build，点「一键安装」。开发者改源码时再 clone 仓库，用 python grok-build-web-install.py。
 
 ## 你需要什么
 
@@ -100,7 +116,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "你
 
 图标可用 `public/grok-icon.ico`。macOS / Linux 会生成 `Grok Build.command`，双击后启动 `npm run dev` 并打开浏览器。
 
-Windows 上服务是**无窗口**启动的：不会弹出终端窗口。输出写到 `%LOCALAPPDATA%\grok-build-web\dev.log`（每次启动重写），启动超时会弹窗并附上日志尾巴。
+Windows 上双击快捷方式会打开应用自带的独立窗口，不调用本机 Chrome 或 Edge，也不会弹出终端。服务输出写到 `%LOCALAPPDATA%\grok-build-web\desktop.log`（每次启动重写），打不开窗口时弹窗并附上日志尾巴。关掉窗口即停止服务。`npm run dev` 仍是浏览器开发模式。
 
 停止服务（双击即可，或直接跑脚本）：
 

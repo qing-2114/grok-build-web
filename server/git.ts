@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { rm } from 'node:fs/promises'
+import { rm, stat } from 'node:fs/promises'
 import { platform } from 'node:os'
 import { isAbsolute, relative, resolve } from 'node:path'
 
@@ -37,6 +37,39 @@ export function normalizePath(input: string): string {
   } catch {
     return trimmed
   }
+}
+
+// 浏览器选文件夹只回传叶子名。相对路径会接到工作台自己的启动目录，
+// 例如「公众号写作」变成 F:\grok-build-web\公众号写作。会话 cwd 必须是绝对路径。
+export function isAbsoluteInputPath(input: string): boolean {
+  const trimmed = input.trim()
+  if (!trimmed) return false
+  if (isAbsolute(trimmed)) return true
+  return /^(?:[A-Za-z]:[\\/]|\\\\)/.test(trimmed)
+}
+
+export async function assertExistingDirectory(input: string): Promise<string> {
+  const raw = input.trim()
+  if (!raw) throw new Error('请先填写项目文件夹')
+  if (!isAbsoluteInputPath(raw)) {
+    throw new Error(
+      `「${raw}」不是完整路径。浏览器只能拿到文件夹名，请改成带盘符的路径，例如 F:\\${raw}`,
+    )
+  }
+  const cwd = normalizePath(raw)
+  let info: Awaited<ReturnType<typeof stat>>
+  try {
+    info = await stat(cwd)
+  } catch (err) {
+    const code =
+      err && typeof err === 'object' && 'code' in err
+        ? (err as { code?: string }).code
+        : ''
+    if (code === 'ENOENT') throw new Error(`找不到文件夹：${cwd}`)
+    throw new Error(`无法读取文件夹：${cwd}`)
+  }
+  if (!info.isDirectory()) throw new Error(`不是文件夹：${cwd}`)
+  return cwd
 }
 
 export function samePath(a: string, b: string): boolean {

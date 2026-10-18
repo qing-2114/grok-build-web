@@ -55,6 +55,17 @@ export function friendlyFsError(err: unknown, fallback: string): string {
   return msg
 }
 
+export async function pickNativeFolder(start = ''): Promise<string | null> {
+  const res = await fetch('/api/fs/pick-folder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ start }),
+  })
+  const data = await parseJson<{ path?: string | null }>(res)
+  const picked = typeof data.path === 'string' ? data.path.trim() : ''
+  return picked || null
+}
+
 export async function listDir(path: string): Promise<FsEntry[]> {
   const res = await fetch(`/api/fs/list?path=${encodeURIComponent(path)}`)
   const data = await parseJson<{ entries: FsEntry[] }>(res)

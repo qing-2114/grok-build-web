@@ -58,27 +58,36 @@ function ProjectForm({ onClose }: { onClose: () => void }) {
   async function browse() {
     setPicking(true)
     setPathError('')
+    const start = isAbsoluteFolderPath(path) ? path : ''
+    let nativeError: unknown = null
     try {
-      if (isWindowsPlatform()) {
-        const native = await pickNativeFolder(isAbsoluteFolderPath(path) ? path : '')
+      // 三个平台都先试系统对话框：它回传完整路径，且不依赖浏览器内核。
+      try {
+        const native = await pickNativeFolder(start)
         if (!native) return
         setPath(native)
         setName((prev) => prev || folderNameFromPath(native))
         return
+      } catch (err) {
+        nativeError = err
       }
       const picked = await pickLocalFolder()
       if (picked === 'aborted') return
       if (picked === 'unsupported') {
-        notify('当前浏览器不支持文件夹选择，请手动填写路径')
+        notify(
+          nativeError instanceof Error
+            ? nativeError.message
+            : '当前浏览器不支持文件夹选择，请手动填写路径',
+        )
         return
       }
+      setName((prev) => prev || picked.name)
       if (!isAbsoluteFolderPath(path)) {
         setPath('')
         setPathError(
           `已选中「${picked.name}」。浏览器拿不到完整路径，请填写以 / 开头的路径。`,
         )
       }
-      setName((prev) => prev || picked.name)
     } catch (err) {
       notify(err instanceof Error ? err.message : '无法打开文件夹选择器', 'error')
     } finally {

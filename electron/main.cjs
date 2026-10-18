@@ -1,4 +1,5 @@
-const { app, BrowserWindow, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron')
+const { join } = require('node:path')
 
 const url = process.env.GROK_WEB_URL || 'http://127.0.0.1:5173/'
 const icon = process.env.GROK_WEB_ICON || ''
@@ -13,6 +14,22 @@ function isAppUrl(target) {
   }
 }
 
+ipcMain.handle('pick-folder', async (event, start) => {
+  const sender = event.senderFrame?.url || event.sender.getURL()
+  if (!isAppUrl(sender)) throw new Error('不允许的调用来源')
+  const options = {
+    title: '选择项目文件夹',
+    properties: ['openDirectory', 'createDirectory'],
+  }
+  if (typeof start === 'string' && start.trim()) options.defaultPath = start.trim()
+  const win = BrowserWindow.fromWebContents(event.sender)
+  const result = win
+    ? await dialog.showOpenDialog(win, options)
+    : await dialog.showOpenDialog(options)
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -24,6 +41,7 @@ function createWindow() {
     autoHideMenuBar: true,
     icon: icon || undefined,
     webPreferences: {
+      preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,

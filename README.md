@@ -52,11 +52,11 @@ py -3 grok-build-web-install.py
 - [Python 3](https://www.python.org/)（一键脚本）
 - [Node.js](https://nodejs.org/) 20 或更高
 - 本机 [Grok Build](https://x.ai) CLI，或让一键脚本代装（终端能执行 `grok --version`）
-- Chromium 内核浏览器（文件夹选择器用得到）
+- 任意现代浏览器（文件夹选择走本机系统对话框；Linux 桌面需 `zenity` 或 `kdialog`，没有时仍可手动填写路径）
 
-![空白工作台](docs/screenshots/workbench.png)
+![空白工作台](docs/screenshots/workbench-2.png)
 
-![右侧栏](docs/screenshots/right-rail.png)
+![右侧栏](docs/screenshots/right-rail-2.png)
 
 ![模型部署](docs/screenshots/model-deploy.png)
 

@@ -697,11 +697,13 @@ function windowsPowerShell(): string {
   )
 }
 
-// 网页的文件夹选择器不回传盘符。本机服务用系统对话框拿完整路径。
-export function pickFolder(start = ''): Promise<string | null> {
-  if (process.platform !== 'win32') {
-    return Promise.reject(new Error('当前系统没有本机文件夹对话框'))
-  }
+function stripTrailingSlash(path: string): string {
+  // 根目录不能 trim：Windows 的 C:\ 和 POSIX 的 / 都要原样保留。
+  if (path === '/' || /^[A-Za-z]:[\\/]$/.test(path)) return path
+  return path.replace(/[\\/]+$/, '')
+}
+
+function pickFolderWindows(start: string): Promise<string | null> {
   const ps = windowsPowerShell()
   if (!existsSync(ps)) {
     return Promise.reject(new Error('找不到 PowerShell，无法打开文件夹对话框'))
@@ -741,6 +743,113 @@ export function pickFolder(start = ''): Promise<string | null> {
       reject(new Error(err.trim() || '无法打开文件夹对话框'))
     })
   })
+}
+
+function pickFolderMac(start: string): Promise<string | null> {
+  const osascript = findOnPath('osascript') || '/usr/bin/osascript'
+  if (!existsSync(osascript)) {
+    return Promise.reject(new Error('找不到 osascript，无法打开文件夹对话框'))
+  }
+  // 取消（-128）在 AppleScript 里就地吃掉并输出空串，不依赖系统语言。
+  const script = `set startPath to system attribute "GROK_PICK_START"
+try
+  if startPath is "" then
+    set theFolder to choose folder with prompt "选择项目文件夹"
+  else
+    set theFolder to choose folder with prompt "选择项目文件夹" default location (POSIX file startPath)
+  end if
+on error number -128
+  return ""
+end try
+return POSIX path of theFolder`
+  return new Promise((resolvePromise, reject) => {
+    const proc = spawn(osascript, ['-e', script], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GROK_PICK_START: existsSync(start) ? start : '' },
+    })
+    let out = ''
+    let err = ''
+    proc.stdout.setEncoding('utf8')
+    proc.stderr.setEncoding('utf8')
+    proc.stdout.on('data', (chunk: string) => {
+      out += chunk
+    })
+    proc.stderr.on('data', (chunk: string) => {
+      err += chunk
+    })
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      const picked = out.trim()
+      if (code === 0) {
+        resolvePromise(picked ? stripTrailingSlash(picked) : null)
+        return
+      }
+      if (/User canceled|-128/.test(err)) {
+        resolvePromise(null)
+        return
+      }
+      reject(new Error(err.trim() || '无法打开文件夹对话框'))
+    })
+  })
+}
+
+function runUnixFolderDialog(command: string, args: string[]): Promise<string | null> {
+  return new Promise((resolvePromise, reject) => {
+    const proc = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    proc.stdout.setEncoding('utf8')
+    proc.stderr.setEncoding('utf8')
+    proc.stdout.on('data', (chunk: string) => {
+      out += chunk
+    })
+    proc.stderr.on('data', (chunk: string) => {
+      err += chunk
+    })
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      const picked = out.trim()
+      if (code === 0 && picked) {
+        resolvePromise(stripTrailingSlash(picked))
+        return
+      }
+      if (code === 1 && !picked) {
+        resolvePromise(null)
+        return
+      }
+      reject(new Error(err.trim() || '无法打开文件夹对话框'))
+    })
+  })
+}
+
+function pickFolderLinux(start: string): Promise<string | null> {
+  const zenity = findOnPath('zenity') || findOnPath('yad')
+  if (zenity) {
+    const args = ['--file-selection', '--directory', '--title=选择项目文件夹']
+    if (existsSync(start)) args.push(`--filename=${stripTrailingSlash(start)}/`)
+    return runUnixFolderDialog(zenity, args)
+  }
+  const kdialog = findOnPath('kdialog')
+  if (kdialog) {
+    return runUnixFolderDialog(kdialog, [
+      '--getexistingdirectory',
+      existsSync(start) ? start : homedir(),
+      '--title',
+      '选择项目文件夹',
+    ])
+  }
+  return Promise.reject(
+    new Error('没有找到 zenity / kdialog，无法打开文件夹对话框；请手动填写路径'),
+  )
+}
+
+// 网页的文件夹选择器不回传完整路径，非 Chromium 浏览器还常常没有。
+// 本机服务用系统对话框拿完整路径，三个平台都走这里。
+export function pickFolder(start = ''): Promise<string | null> {
+  const folder = start.trim()
+  if (process.platform === 'win32') return pickFolderWindows(folder)
+  if (process.platform === 'darwin') return pickFolderMac(folder)
+  return pickFolderLinux(folder)
 }
 
 export function revealInExplorer(path: string, cwd = ''): void {

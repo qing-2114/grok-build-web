@@ -58,6 +58,7 @@ cpSync(join(root, 'dist'), join(stage, 'dist'), { recursive: true })
 mkdirSync(join(stage, 'server'), { recursive: true })
 cpSync(join(root, 'build', 'desktop.cjs'), join(stage, 'server', 'desktop.cjs'))
 cpSync(join(root, 'electron', 'main.cjs'), join(stage, 'electron', 'main.cjs'))
+cpSync(join(root, 'electron', 'preload.cjs'), join(stage, 'electron', 'preload.cjs'))
 cpSync(join(root, 'public', 'grok-icon.ico'), join(stage, 'icon.ico'))
 cpSync(join(root, 'scripts', 'launch-packaged.cjs'), join(stage, 'launch.cjs'))
 

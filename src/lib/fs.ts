@@ -56,6 +56,22 @@ export function friendlyFsError(err: unknown, fallback: string): string {
 }
 
 export async function pickNativeFolder(start = ''): Promise<string | null> {
+  // 桌面窗口里直接调 Electron 主进程的系统对话框，拿到的路径和窗口同一套权限；
+  // 浏览器模式再退回本机服务（各平台各自的系统对话框）。
+  const bridge = (
+    window as Window & {
+      grokDesktop?: { pickFolder?: (start?: string) => Promise<string | null> }
+    }
+  ).grokDesktop
+  const desktopPick = bridge?.pickFolder
+  if (typeof desktopPick === 'function') {
+    try {
+      const picked = await desktopPick.call(bridge, start)
+      return typeof picked === 'string' && picked.trim() ? picked.trim() : null
+    } catch {
+      // 窗口里的 IPC 失败（例如 preload 被旧版本缓存）就继续走服务端。
+    }
+  }
   const res = await fetch('/api/fs/pick-folder', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

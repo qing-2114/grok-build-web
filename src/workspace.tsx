@@ -30,6 +30,7 @@ import {
   type AgentModel,
   type PromptFile,
 } from './lib/agent'
+import { isDemoMode } from './lib/demo'
 import { isAbsoluteFolderPath, relativeFolderMessage } from './lib/folder'
 import { looksLikeHtml, isWebUrl } from './lib/paths'
 import { loadState, saveState, type Persisted } from './lib/storage'
@@ -344,7 +345,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           models: status.models,
           currentModelId: status.currentModelId,
         })
-        const remote = await fetchSessions()
+        const remote = isDemoMode() ? [] : await fetchSessions()
         if (cancelled) return
         dispatch({ type: 'merge-remote', sessions: remote })
         const storedId = loadState()?.activeSessionId
@@ -677,7 +678,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const project = stateRef.current.projects.find((p) => p.id === id)
       if (project) {
         void refreshGit([project])
-        if (project.path) {
+        if (project.path && !isDemoMode()) {
           void fetchSessions(project.path)
             .then((sessions) =>
               dispatch({ type: 'merge-remote', sessions }),

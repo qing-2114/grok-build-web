@@ -11,6 +11,7 @@ import {
   IconTrash,
 } from '../icons'
 import { searchSessionText, type SearchHit } from '../lib/agent'
+import { isDemoMode } from '../lib/demo'
 import { SIDEBAR_WIDTH_DEFAULT } from '../lib/layout'
 import { relativeTime } from '../lib/time'
 import { displayTitle } from '../lib/title'
@@ -342,10 +343,12 @@ export function Sidebar() {
     return filteredHistory.filter((s) => s.projectId === project.id)
   }
 
-  const looseSessions = filteredHistory.filter((s) => !s.projectId)
+  const looseSessions = isDemoMode()
+    ? []
+    : filteredHistory.filter((s) => !s.projectId)
 
   // 标题 / 项目名之外，再按会话正文搜一遍（服务端扫 updates.jsonl，有缓存）。
-  const textQuery = q.length >= 2 ? q : ''
+  const textQuery = q.length >= 2 && !isDemoMode() ? q : ''
   useEffect(() => {
     if (!textQuery) return
     const ac = new AbortController()

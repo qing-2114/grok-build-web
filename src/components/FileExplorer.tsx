@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { IconChevron, IconFolder, IconSearch } from '../icons'
+import { FileTypeIcon } from './FileTypeIcon'
 import {
   friendlyFsError,
   listDir,
@@ -19,6 +20,7 @@ import {
 } from '../lib/paths'
 import { useWorkspace } from '../workspace'
 import { CodePreview } from './CodePreview'
+import { DocxPreview } from './DocxPreview'
 import { RichText } from './RichText'
 
 function TreeRow({
@@ -67,8 +69,9 @@ function TreeRow({
         {entry.kind === 'dir' ? (
           <IconChevron className={open ? 'is-open' : ''} />
         ) : (
-          <span className="tree-file-mark" />
+          <span className="tree-chevron-spacer" />
         )}
+        <FileTypeIcon name={entry.name} folder={entry.kind === 'dir'} expanded={open} />
         <span className="tree-name">{entry.name}</span>
       </button>
       {entry.kind === 'dir' && open ? (
@@ -235,13 +238,20 @@ export function FileExplorer() {
   } else if (preview?.kind === 'pdf') {
     body = (
       <div className="file-preview-body is-frame">
+        <div className="pdf-preview-actions">
+          <span>PDF 预览</span>
+          <button type="button" className="text-btn" onClick={() => revealInExplorer(preview.path)}>在资源管理器中显示</button>
+        </div>
         <iframe
+          key={preview.path}
           className="file-preview-frame"
           title={preview.name}
           src={`${rawFileUrl(sessionCwd, preview.path)}#toolbar=1`}
         />
       </div>
     )
+  } else if (preview?.kind === 'docx') {
+    body = <DocxPreview cwd={sessionCwd} path={preview.path} name={preview.name} />
   } else if (preview?.kind === 'markdown') {
     body = (
       <div className="file-preview-body md-preview">

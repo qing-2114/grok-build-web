@@ -8,7 +8,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { IconFolder, IconMonitor } from '../icons'
-import { isWebUrl, looksLikeFilePath, looksLikeHtml } from '../lib/paths'
+import { isWebUrl, isMarkdownFileReference, looksLikeFilePath, looksLikeHtml } from '../lib/paths'
 import { fileManagerName, modKeyLabel } from '../lib/platform'
 
 export function PathLink({
@@ -28,7 +28,7 @@ export function PathLink({
 }) {
   const web = isWebUrl(href)
   const html = looksLikeHtml(href)
-  const file = !web && looksLikeFilePath(href)
+  const file = !web && (looksLikeFilePath(href) || isMarkdownFileReference(href))
   const canBrowser = Boolean((web || html) && onOpenUrl)
   const canReveal = Boolean(file && onReveal)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)

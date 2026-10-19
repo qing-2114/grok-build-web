@@ -18,6 +18,7 @@ import { mcpAddArgs } from '../server/mcp.ts'
 import { TranscriptBuilder, updateToEvent } from '../server/transcript.ts'
 import { lineDiff, diffStats } from '../src/lib/diff.ts'
 import { sessionToMarkdown, safeFileName } from '../src/lib/export.ts'
+import { isExplicitFileReference, isInlineFileReference, isMarkdownFileReference, markdownLinkTarget } from '../src/lib/paths.ts'
 import { initialState, reducer } from '../src/workspace-state.ts'
 
 describe('transcript：plan / turn_completed', () => {
@@ -102,6 +103,37 @@ describe('transcript：plan / turn_completed', () => {
     const session = s1.sessions.find((s) => s.id === sid)!
     assert.equal(session.plan?.[0].content, 'x')
     assert.equal(session.messages[1].usage?.total, 3)
+  })
+})
+
+describe('explicit chat file links', () => {
+  it('only treats unambiguous filesystem paths as link candidates', () => {
+    for (const value of ['C:\\work\\src\\main.ts', './README.md', '../assets/logo.png', '/tmp/report.pdf', '~/notes.txt']) {
+      assert.equal(isExplicitFileReference(value), true, value)
+    }
+    for (const value of ['main.ts', 'src/main.ts', 'foo/bar', 'the report.pdf', '.env']) {
+      assert.equal(isExplicitFileReference(value), false, value)
+    }
+    assert.equal(isMarkdownFileReference('src/main.ts'), true)
+    assert.equal(isMarkdownFileReference('main.ts'), true)
+  })
+  it('preserves intentional Markdown filenames, spaces, and optional titles', () => {
+    for (const value of ['README.md', '报告 终稿.docx', 'docs/报告 终稿.docx', 'C:\\我的 文档\\报告.docx']) {
+      assert.equal(markdownLinkTarget(value), value)
+      assert.equal(isMarkdownFileReference(value), true)
+    }
+    assert.equal(markdownLinkTarget('<docs/报告 终稿.docx> "报告"'), 'docs/报告 终稿.docx')
+    assert.equal(markdownLinkTarget('README.md "Read me"'), 'README.md')
+    assert.equal(isMarkdownFileReference('javascript:alert.txt'), false)
+  })
+  it('links file code spans in final answers, not process text or commands', () => {
+    for (const value of ['README.md', 'src/main.ts', '报告 终稿.docx', 'C:\\我的 文档\\报告.docx']) {
+      assert.equal(isInlineFileReference(value, true), true, value)
+      assert.equal(isInlineFileReference(value, false), false, value)
+    }
+    for (const value of ['foo/bar', '/api/status', 'npm run build', 'node src/main.ts', 'git diff README.md', 'cat README.md', 'x && README.md']) {
+      assert.equal(isInlineFileReference(value, true), false, value)
+    }
   })
 })
 

@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { IconCheck, IconCopy } from '../icons'
-import { isWebUrl, looksLikeFilePath } from '../lib/paths'
+import { isInlineFileReference, isMarkdownFileReference, isWebUrl, markdownLinkTarget } from '../lib/paths'
 import type { ChatImage } from '../types'
 import { PathLink } from './PathLink'
 
@@ -11,6 +11,7 @@ const SPLIT =
   /(`[^`]+`|\*\*[^*]+\*\*|\[Image #\d+\]|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s<>)"']+)/g
 
 type Openers = {
+  linkInlineFiles?: boolean
   onOpenFile?: (path: string) => void
   onOpenUrl?: (url: string) => void
   onReveal?: (path: string) => void
@@ -44,7 +45,7 @@ function inline(text: string, images: ChatImage[], openers: Openers) {
   return parts.map((part, i) => {
     if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
       const inner = part.slice(1, -1)
-      if (isWebUrl(inner) || looksLikeFilePath(inner)) {
+      if (isWebUrl(inner) || (isInlineFileReference(inner, Boolean(openers.linkInlineFiles)) && openers.onOpenFile)) {
         return (
           <FileOrWebLink key={i} href={inner} {...openers}>
             <code className="inline-code is-link">{inner}</code>
@@ -102,8 +103,8 @@ function inline(text: string, images: ChatImage[], openers: Openers) {
     }
     const link = part.match(MD_LINK)
     if (link) {
-      const href = link[2].trim().replace(/^<|>$/g, '').split(/\s+/)[0]
-      if (isWebUrl(href) || looksLikeFilePath(href)) {
+      const href = markdownLinkTarget(link[2])
+      if (isWebUrl(href) || (isMarkdownFileReference(href) && openers.onOpenFile)) {
         return (
           <FileOrWebLink key={i} href={href} {...openers}>
             {link[1]}
@@ -254,6 +255,7 @@ export const RichText = memo(function RichText({
   onOpenUrl,
   onReveal,
   resolveMedia,
+  linkInlineFiles = false,
 }: {
   text: string
   images?: ChatImage[]
@@ -261,8 +263,9 @@ export const RichText = memo(function RichText({
   onOpenUrl?: (url: string) => void
   onReveal?: (path: string) => void
   resolveMedia?: (src: string) => string | null
+  linkInlineFiles?: boolean
 }) {
-  const openers: Openers = { onOpenFile, onOpenUrl, onReveal, resolveMedia }
+  const openers: Openers = { onOpenFile, onOpenUrl, onReveal, resolveMedia, linkInlineFiles }
   const lines = text.replace(/\r\n/g, '\n').split('\n')
   const nodes: ReactNode[] = []
   let i = 0

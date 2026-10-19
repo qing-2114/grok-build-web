@@ -3,7 +3,6 @@ import { basename, extname, relative, resolve } from 'node:path'
 import { createReadStream } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { docxToMarkdown } from './docx.ts'
 
 export function normalizeFsPath(input: string): string {
   const trimmed = input.trim()
@@ -346,7 +345,7 @@ export type FilePreview = {
   name: string
   relative: string
   mime: string
-  kind: 'text' | 'image' | 'binary' | 'pdf' | 'markdown' | 'code'
+  kind: 'text' | 'image' | 'binary' | 'pdf' | 'markdown' | 'code' | 'docx'
   language?: string
   message?: string
   size: number
@@ -410,22 +409,7 @@ export async function readPreview(
         message: 'Word 文件太大，无法预览',
       }
     }
-    const buf = await readFile(abs)
-    try {
-      const text = docxToMarkdown(buf)
-      return {
-        ...baseMeta,
-        kind: 'markdown',
-        language: 'markdown',
-        text,
-      }
-    } catch (err) {
-      return {
-        ...baseMeta,
-        kind: 'binary',
-        message: err instanceof Error ? err.message : '无法解析 Word 文档',
-      }
-    }
+    return { ...baseMeta, kind: 'docx' }
   }
   const looksText =
     TEXT_EXT.has(e) ||
@@ -491,12 +475,14 @@ export async function streamRaw(
   const st = await stat(abs)
   if (st.isDirectory()) throw new Error('这是文件夹')
   const mime = mimeOf(basename(abs))
-  const filename = basename(abs).replace(/[\r\n"]/g, '')
+  // HTTP headers cannot contain Chinese (or other Unicode) filenames.
+  const filename = encodeURIComponent(basename(abs)).replace(/[!'()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
   res.writeHead(200, {
     'Content-Type': mime,
     'Content-Length': st.size,
     'Cache-Control': 'no-store',
-    'Content-Disposition': `inline; filename="${filename}"`,
+    'Content-Disposition': `inline; filename="preview${extname(abs).replace(/[^.a-zA-Z0-9]/g, '')}"; filename*=UTF-8''${filename}`,
   })
   const stream = createReadStream(abs)
   stream.pipe(res)

@@ -1,4 +1,4 @@
-import { looksLikeHtml, isWebUrl } from './paths'
+import { looksLikeHtml, isWebUrl, resolveOpenPath } from './paths'
 
 export type FsEntry = {
   name: string
@@ -11,7 +11,7 @@ export type FilePreview = {
   name: string
   relative: string
   mime: string
-  kind: 'text' | 'image' | 'binary' | 'pdf' | 'markdown' | 'code'
+  kind: 'text' | 'image' | 'binary' | 'pdf' | 'markdown' | 'code' | 'docx'
   language?: string
   message?: string
   size: number
@@ -243,6 +243,14 @@ export async function revealInExplorer(
   target: string,
   cwd?: string,
 ): Promise<void> {
+  const desktop = (window as Window & {
+    grokDesktop?: { revealFile?: (path: string) => Promise<void> }
+  }).grokDesktop
+  if (desktop?.revealFile) {
+    // Keep the user gesture on the desktop path; do not round-trip through HTTP.
+    await desktop.revealFile(resolveOpenPath(target, cwd || ''))
+    return
+  }
   const body: Record<string, string | boolean> = {
     path: target,
     reveal: true,

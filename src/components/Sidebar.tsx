@@ -23,6 +23,64 @@ import { UserMenu } from './UserMenu'
 
 const PROJECT_SESSION_PREVIEW = 5
 
+function SessionDeleteButton({ label, onDelete }: { label: string; onDelete: () => void }) {
+  const ref = useRef<HTMLButtonElement>(null)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
+  const hide = () => {
+    if (timer.current) clearTimeout(timer.current)
+    setPosition(null)
+  }
+  const show = () => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      const rect = ref.current?.getBoundingClientRect()
+      if (rect) setPosition({ left: rect.right + 8, top: rect.top + rect.height / 2 })
+    }, 220)
+  }
+  useEffect(() => {
+    const dismiss = () => {
+      if (timer.current) clearTimeout(timer.current)
+      setPosition(null)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') dismiss()
+    }
+    window.addEventListener('scroll', dismiss, true)
+    window.addEventListener('resize', dismiss)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      if (timer.current) clearTimeout(timer.current)
+      window.removeEventListener('scroll', dismiss, true)
+      window.removeEventListener('resize', dismiss)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [])
+  return <>
+    <button
+      ref={ref}
+      type="button"
+      className="session-delete"
+      aria-label={`删除 ${label}`}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
+      onClick={(event) => {
+        event.stopPropagation()
+        hide()
+        onDelete()
+      }}
+    >
+      <IconClose />
+    </button>
+    {position && createPortal(
+      <span className="session-delete-hint" style={position} aria-hidden="true">删除会话</span>,
+      document.body,
+    )}
+  </>
+}
+
 function SessionRow({
   session,
   override,
@@ -97,18 +155,7 @@ function SessionRow({
           <i className="session-unread" />
         </span>
       ) : null}
-      <button
-        type="button"
-        className="session-delete"
-        aria-label={`删除 ${label}`}
-        title="删除会话"
-        onClick={(e) => {
-          e.stopPropagation()
-          onDelete()
-        }}
-      >
-        <IconClose />
-      </button>
+      <SessionDeleteButton label={label} onDelete={onDelete} />
     </li>
   )
 }

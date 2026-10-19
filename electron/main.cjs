@@ -1,8 +1,13 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron')
 const { join } = require('node:path')
+const { stat } = require('node:fs/promises')
+const { isAbsolute, normalize } = require('node:path')
 
 const url = process.env.GROK_WEB_URL || 'http://127.0.0.1:5173/'
-const icon = process.env.GROK_WEB_ICON || ''
+const icon = process.env.GROK_WEB_ICON || join(__dirname, '..', 'public', 'grok-icon.ico')
+const appId = 'com.grokbuild.web.desktop'
+
+if (process.platform === 'win32') app.setAppUserModelId(appId)
 
 function isAppUrl(target) {
   try {
@@ -30,6 +35,19 @@ ipcMain.handle('pick-folder', async (event, start) => {
   return result.filePaths[0]
 })
 
+ipcMain.handle('reveal-file', async (event, path) => {
+  if (event.senderFrame !== event.sender.mainFrame || !isAppUrl(event.senderFrame.url)) {
+    throw new Error('不允许的调用来源')
+  }
+  if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')) {
+    throw new Error('需要有效的本地绝对路径')
+  }
+  const target = normalize(path)
+  await stat(target)
+  // Run in the foreground desktop process, not the background HTTP server.
+  shell.showItemInFolder(target)
+})
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -45,9 +63,14 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      plugins: true,
     },
   })
   win.setMenuBarVisibility(false)
+  if (process.platform === 'win32') {
+    // The taskbar identity must not inherit the bundled electron.exe icon.
+    win.setAppDetails({ appId, appIconPath: icon, appIconIndex: 0 })
+  }
 
   win.webContents.setWindowOpenHandler(({ url: target }) => {
     if (isAppUrl(target)) return { action: 'allow' }

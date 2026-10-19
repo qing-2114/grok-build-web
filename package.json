@@ -1,7 +1,7 @@
 {
   "name": "grok-build-web",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,12 +10,14 @@
     "preview": "vite preview",
     "desktop": "tsx server/desktop.ts",
     "pack:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-win.ps1",
-    "test": "tsx --test test/git.test.ts test/shells.test.ts test/platform.test.ts test/window.test.ts test/release.test.ts && node --experimental-strip-types --no-warnings --import ./scripts/test-resolve.mjs --test \"tests/**/*.test.ts\" && node --experimental-strip-types --no-warnings server/guard.selftest.mjs && node server/exec.selftest.mjs"
+    "test": "tsx --test test/docx-preview.test.ts test/fs-preview.test.ts test/git.test.ts test/shells.test.ts test/platform.test.ts test/window.test.ts test/release.test.ts && node --experimental-strip-types --no-warnings --import ./scripts/test-resolve.mjs --test \"tests/**/*.test.ts\" && node --experimental-strip-types --no-warnings server/guard.selftest.mjs && node server/exec.selftest.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "docx-preview": "^0.4.1",
     "electron": "^44.9.0",
+    "material-icon-theme": "5.39.0",
     "node-pty": "^1.1.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

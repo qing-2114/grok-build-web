@@ -25,6 +25,9 @@
   --sidebar-w: 264px;
   --right-w: 520px;
   --dock-pad: 28px;
+  --motion-fast: 140ms;
+  --motion-enter: 220ms;
+  --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   color-scheme: dark;
 }
 
@@ -540,6 +543,23 @@ textarea {
 .session-delete:hover {
   background: var(--hover);
   color: var(--danger);
+}
+
+.session-delete-hint {
+  position: fixed;
+  z-index: 100;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: #242424;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateY(-50%);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+  animation: hint-right-in var(--motion-fast) var(--motion-ease);
 }
 
 .session-row .session-item {
@@ -3097,6 +3117,16 @@ html.is-col-resizing .sidebar {
   background: #111;
 }
 
+.pdf-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 8px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid #303030;
+}
+
 .file-preview-code {
   margin: 0;
   padding: 12px 14px 24px;
@@ -3111,6 +3141,36 @@ html.is-col-resizing .sidebar {
   margin: 8px 14px 12px;
   font-size: 12px;
   color: var(--ink-mute);
+}
+
+.docx-preview {
+  background: #666;
+  padding: 20px 12px 4px;
+}
+
+.docx-preview .docx-document-wrapper {
+  background: transparent;
+  padding: 0;
+}
+
+.docx-preview .docx-document-wrapper > section.docx-document {
+  margin: 0 auto 18px;
+  box-shadow: 0 2px 12px #0006;
+}
+
+.docx-preview .docx-document-wrapper section.docx-document {
+  color: #111;
+  background: #fff;
+}
+
+.docx-preview .docx-document-wrapper table {
+  border-collapse: collapse;
+}
+
+.docx-preview .file-preview-hint {
+  max-width: 900px;
+  margin: 0 auto 12px;
+  color: #fff;
 }
 
 .md-preview {
@@ -3312,12 +3372,17 @@ html.is-col-resizing .sidebar {
   transform: none;
 }
 
-.tree-file-mark {
-  width: 12px;
-  height: 12px;
+.tree-row .tree-file-icon {
+  width: 18px;
+  height: 18px;
   flex: 0 0 auto;
-  border-radius: 2px;
-  border: 1px solid var(--line-strong);
+  object-fit: contain;
+  margin-right: 2px;
+}
+
+.tree-chevron-spacer {
+  width: 12px;
+  flex: 0 0 12px;
 }
 
 .tree-name {
@@ -4362,6 +4427,76 @@ html.is-col-resizing .sidebar {
   }
 }
 
+/* Animate interaction surfaces, never streaming text or terminal output. */
+:where(.icon-btn, .rail-item, .project-icon-btn, .session-delete,
+  .settings-nav-item, .menu button, .user-menu button, .slash-item,
+  .btn-solid, .btn-ghost, .send-btn, .chip, .editor-tab, .tab-x) {
+  transition:
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    opacity var(--motion-fast) ease,
+    scale var(--motion-fast) var(--motion-ease);
+}
+
+:where(.icon-btn, .project-icon-btn, .session-delete, .btn-solid,
+  .btn-ghost, .send-btn, .tab-x):active:not(:disabled) {
+  scale: 0.94;
+}
+
+.composer-box {
+  transition: border-color var(--motion-fast) ease, background-color var(--motion-fast) ease;
+}
+
+.menu, .user-menu, .slash-menu {
+  animation: surface-in var(--motion-enter) var(--motion-ease);
+}
+
+.dialog, .palette {
+  animation: dialog-in 260ms var(--motion-ease);
+}
+
+.scrim, .settings {
+  animation: surface-fade-in var(--motion-enter) ease;
+}
+
+.search-wrap, .attach-card, .tool-detail, .tool-output.is-input {
+  animation: surface-in var(--motion-enter) var(--motion-ease);
+}
+
+.settings-main > *, .right-rail-body > * {
+  animation: surface-in var(--motion-enter) var(--motion-ease);
+}
+
+.right-rail {
+  animation: rail-in 260ms var(--motion-ease);
+}
+
+@keyframes surface-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes surface-in {
+  from { opacity: 0; translate: 0 5px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+@keyframes dialog-in {
+  from { opacity: 0; translate: 0 8px; scale: 0.98; }
+  to { opacity: 1; translate: 0 0; scale: 1; }
+}
+
+@keyframes rail-in {
+  from { opacity: 0; translate: 12px 0; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+@keyframes hint-right-in {
+  from { opacity: 0; translate: -4px 0; }
+  to { opacity: 1; translate: 0 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -4369,6 +4504,7 @@ html.is-col-resizing .sidebar {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
   }
 }
 

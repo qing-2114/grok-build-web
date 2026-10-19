@@ -36,6 +36,39 @@ export function looksLikeFilePath(value: string): boolean {
   return false
 }
 
+/** Chat prose should only link explicit filesystem paths, not arbitrary names or prose. */
+export function isExplicitFileReference(value: string): boolean {
+  const s = value.trim().replace(/^<|>$/g, '')
+  if (!looksLikeFilePath(s)) return false
+  return /^[A-Za-z]:[\\/]/.test(s) || s.startsWith('\\\\') ||
+    s.startsWith('/') || s.startsWith('./') || s.startsWith('../') ||
+    s.startsWith('.\\') || s.startsWith('..\\') || s.startsWith('~/') || s.startsWith('~\\')
+}
+
+/** Explicit Markdown links may name a file with spaces, including a bare filename. */
+export function isMarkdownFileReference(value: string): boolean {
+  const s = value.trim().replace(/^<|>$/g, '')
+  if (!s || s.length > 420 || /[\r\n<>|?*]/.test(s) || isWebUrl(s)) return false
+  if (/^[a-z][a-z\d+.-]*:/i.test(s) && !/^[A-Za-z]:[\\/]/.test(s)) return false
+  return FILE_EXT.test(s) || DOTFILE.test(s) || isExplicitFileReference(s)
+}
+
+export function markdownLinkTarget(value: string): string {
+  const s = value.trim()
+  const angle = s.match(/^<([^>]+)>(?:\s+["'][\s\S]*["'])?$/)
+  if (angle) return angle[1]
+  return s.replace(/\s+["'][^"']*["']$/, '')
+}
+
+/** Only the completed answer auto-links inline-code filenames; process text stays quiet. */
+export function isInlineFileReference(value: string, finalAnswer: boolean): boolean {
+  if (!finalAnswer || !isMarkdownFileReference(value)) return false
+  const s = value.trim()
+  if (/[\r\n|;&`]/.test(s) || /(?:^|\s)--?\w/.test(s)) return false
+  if (/^(?:npm|npx|node|python\d*|pip\d*|git|cd|cat|type|echo|curl|powershell|pwsh|bash|sh)\s/i.test(s)) return false
+  return FILE_EXT.test(s) || DOTFILE.test(s)
+}
+
 export function pathKey(path: string): string {
   return path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
 }

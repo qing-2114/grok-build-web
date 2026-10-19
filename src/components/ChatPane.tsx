@@ -402,6 +402,7 @@ export function ChatPane() {
           <RichText
             text={m.content}
             images={imagesBefore(messages, i)}
+            linkInlineFiles={copyIds.has(m.id)}
             onOpenFile={openLocalFile}
             onOpenUrl={openExternalUrl}
             onReveal={revealInExplorer}

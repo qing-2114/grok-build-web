@@ -5,12 +5,14 @@ export type JsonRpcId = number
 
 const DEFAULT_TIMEOUT_MS = 30_000
 
-// 生成时长不可预估，prompt 只给一个足够长的兜底，让卡死的请求最终也能清理监听器
-export const PROMPT_TIMEOUT_MS = 30 * 60 * 1000
+// This is an idle timeout, not a total generation limit. ACP activity renews it.
+export const PROMPT_IDLE_TIMEOUT_MS = 30 * 60 * 1000
 
 type Pending = {
   resolve: (value: unknown) => void
   reject: (err: Error) => void
+  sessionId?: string
+  touch: () => void
 }
 
 export type PermissionOption = {
@@ -118,19 +120,26 @@ export class GrokAcp extends EventEmitter {
     const id = this.nextId++
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params })
     return new Promise<T>((resolve, reject) => {
-      const timer =
-        timeoutMs > 0
-          ? setTimeout(() => {
-              this.pending.delete(id)
-              const sessionId = params.sessionId
-              if (typeof sessionId === 'string' && sessionId) {
-                this.cancelPermissions(sessionId)
-              }
-              reject(
-                new Error(`${method} 超时（${timeoutLabel(timeoutMs)}无响应）`),
-              )
-            }, timeoutMs)
-          : null
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const sessionId =
+        typeof params.sessionId === 'string' && params.sessionId
+          ? params.sessionId
+          : undefined
+      const armTimeout = () => {
+        if (timer) clearTimeout(timer)
+        if (timeoutMs <= 0) return
+        timer = setTimeout(() => {
+          this.pending.delete(id)
+          if (sessionId) this.cancelPermissions(sessionId)
+          reject(
+            new Error(
+              method === 'session/prompt'
+                ? `${method} 空闲超时（连续 ${timeoutLabel(timeoutMs)}没有 ACP 活动）`
+                : `${method} 超时（${timeoutLabel(timeoutMs)}无响应）`,
+            ),
+          )
+        }, timeoutMs)
+      }
       this.pending.set(id, {
         resolve: (value) => {
           if (timer) clearTimeout(timer)
@@ -140,7 +149,10 @@ export class GrokAcp extends EventEmitter {
           if (timer) clearTimeout(timer)
           reject(err)
         },
+        sessionId,
+        touch: armTimeout,
       })
+      armTimeout()
       this.proc!.stdin.write(payload + '\n', (err) => {
         if (err) {
           this.pending.delete(id)
@@ -312,6 +324,10 @@ export class GrokAcp extends EventEmitter {
     }
 
     if (msg.method === 'session/update') {
+      const sessionId = msg.params?.sessionId
+      if (typeof sessionId === 'string' && sessionId) {
+        this.touchSession(sessionId)
+      }
       this.emit('update', msg.params)
       return
     }
@@ -332,6 +348,7 @@ export class GrokAcp extends EventEmitter {
           '工具调用',
         options: Array.isArray(params.options) ? params.options : [],
       }
+      this.touchSession(req.sessionId)
       this.permissions.set(msg.id, req)
       this.emit('permission', req)
       return
@@ -339,6 +356,12 @@ export class GrokAcp extends EventEmitter {
 
     if (msg.method && msg.id != null) {
       this.respond(msg.id, {})
+    }
+  }
+
+  private touchSession(sessionId: string): void {
+    for (const pending of this.pending.values()) {
+      if (pending.sessionId === sessionId) pending.touch()
     }
   }
 }

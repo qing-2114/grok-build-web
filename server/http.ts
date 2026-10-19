@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
-import { PROMPT_TIMEOUT_MS, type GrokAcp } from './acp.ts'
+import { PROMPT_IDLE_TIMEOUT_MS, type GrokAcp } from './acp.ts'
 import { assertSafeSessionId, HttpError } from './guard.ts'
 import {
   gitChanges,
@@ -871,7 +871,7 @@ async function handle(
       const result = await acp.request<{ stopReason?: string }>(
         'session/prompt',
         { sessionId, prompt: blocks },
-        PROMPT_TIMEOUT_MS,
+        PROMPT_IDLE_TIMEOUT_MS,
       )
       write({ type: 'done', stopReason: result.stopReason || 'end_turn' })
     } catch (err) {

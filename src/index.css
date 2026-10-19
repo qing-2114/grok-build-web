@@ -951,6 +951,50 @@ b {
   gap: 6px;
 }
 
+.follow-prompt.has-attachments {
+  gap: 6px;
+}
+
+.prompt-attachments {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.prompt-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: #141414;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.prompt-attachment svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.prompt-attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-attachment-size {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
 .prompt-images {
   display: flex;
   flex-wrap: wrap;

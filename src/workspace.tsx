@@ -53,6 +53,7 @@ import { fileManagerName } from './lib/platform'
 
 import { MODELS } from './types'
 import type {
+  ChatAttachment,
   ChatImage,
   EffortLevel,
   PermissionMode,
@@ -525,6 +526,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           return false
         }
       }
+      const attachments: ChatAttachment[] = (files ?? [])
+        .filter((file) => !isImageFile(file))
+        .map((file) => ({
+          name: file.name,
+          mime: file.type || 'application/octet-stream',
+          size: file.size,
+        }))
       const payload =
         text.trim() ||
         (otherFiles.length
@@ -552,7 +560,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
 
       let sessionId = session.id
-      dispatch({ type: 'send', text: payload, images, sessionId })
+      dispatch({ type: 'send', text: payload, images, attachments, sessionId })
       if (session.source !== 'grok') {
         try {
           const created = await createRemoteSession({

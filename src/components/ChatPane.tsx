@@ -3,6 +3,7 @@ import {
   IconChevron,
   IconCopy,
   IconDown,
+  IconFile,
   IconMenu,
   IconPanelRight,
   IconPencil,
@@ -196,11 +197,34 @@ const UserPrompt = memo(function UserPrompt({
   onEdit: (id: string) => void
 }) {
   const images = message.images ?? []
+  const attachments = message.attachments ?? []
   const text = images.length
     ? stripImageTokens(message.content)
     : message.content
   return (
-    <div className={images.length ? 'follow-prompt has-images' : 'follow-prompt'}>
+    <div
+      className={
+        images.length || attachments.length
+          ? 'follow-prompt has-attachments'
+          : 'follow-prompt'
+      }
+    >
+      {attachments.length > 0 ? (
+        <div className="prompt-attachments">
+          {attachments.map((file, index) => (
+            <div
+              key={`${file.name}:${file.size}:${index}`}
+              className="prompt-attachment"
+            >
+              <IconFile />
+              <span className="prompt-attachment-name">{file.name}</span>
+              <span className="prompt-attachment-size">
+                {formatAttachmentSize(file.size)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {images.length > 0 ? (
         <div className="prompt-images">
           {images.map((img) => (
@@ -231,6 +255,12 @@ const UserPrompt = memo(function UserPrompt({
     </div>
   )
 })
+
+function formatAttachmentSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 1024) return `${Math.max(0, bytes | 0)} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 function usageLabel(u: TurnUsage): string {
   const parts = [`输入 ${formatMarks(u.input)}`]

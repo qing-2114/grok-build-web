@@ -17,6 +17,12 @@ export type ChatImage = {
   src: string
 }
 
+export type ChatAttachment = {
+  name: string
+  mime: string
+  size: number
+}
+
 export type TurnUsage = {
   input: number
   output: number
@@ -40,6 +46,7 @@ export type Message = {
   createdAt: number
   tool?: ToolCall
   images?: ChatImage[]
+  attachments?: ChatAttachment[]
   /** 这一轮结束时 agent 报告的用量，挂在本轮最后一段助手回复上 */
   usage?: TurnUsage
 }

@@ -15,6 +15,7 @@ import { uid } from './lib/uid'
 import { MODELS } from './types'
 import type {
   ChatImage,
+  ChatAttachment,
   ConnectionStatus,
   ContextUsage,
   EffortLevel,
@@ -84,7 +85,13 @@ export type Action =
   | { type: 'add-project'; project: Project }
   | { type: 'delete-session'; id: string }
   | { type: 'rename-session'; id: string; title: string }
-  | { type: 'send'; text: string; images?: ChatImage[]; sessionId?: string }
+  | {
+      type: 'send'
+      text: string
+      images?: ChatImage[]
+      attachments?: ChatAttachment[]
+      sessionId?: string
+    }
   | {
       type: 'bind-remote'
       localId: string
@@ -621,6 +628,7 @@ export function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         content: text,
         createdAt: now,
         images: action.images?.length ? action.images : undefined,
+        attachments: action.attachments?.length ? action.attachments : undefined,
       }
       const titled =
         session.messages.length === 0 ? titleFrom(text) : session.title

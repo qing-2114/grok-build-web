@@ -5,7 +5,7 @@ const { isAbsolute, normalize } = require('node:path')
 
 const url = process.env.GROK_WEB_URL || 'http://127.0.0.1:5173/'
 const icon = process.env.GROK_WEB_ICON || join(__dirname, '..', 'public', 'grok-icon.ico')
-const appId = 'com.grokbuild.web.desktop'
+const appId = 'com.grokbuild.web.desktop.v2'
 
 if (process.platform === 'win32') app.setAppUserModelId(appId)
 
@@ -69,6 +69,7 @@ function createWindow() {
   win.setMenuBarVisibility(false)
   if (process.platform === 'win32') {
     // The taskbar identity must not inherit the bundled electron.exe icon.
+    // Bumping the AUMID also drops the old per-AppID icon cache (atom icon).
     win.setAppDetails({ appId, appIconPath: icon, appIconIndex: 0 })
   }
 

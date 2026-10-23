@@ -58,3 +58,47 @@ test('desktop reveal validates sender and path before calling the native shell',
   assert.equal(checked.length, 2)
   assert.equal(revealed.length, 1)
 })
+
+test('Windows taskbar identity uses the Grok icon and a fresh AUMID cache key', async () => {
+  const appIds: string[] = []
+  const windows: Array<{ options: Record<string, unknown>; details?: Record<string, unknown> }> = []
+  const icon = path.resolve('public/grok-icon.ico')
+  vm.runInNewContext(readFileSync('electron/main.cjs', 'utf8'), {
+    require: (name: string) => {
+      if (name === 'node:path') return path
+      if (name === 'node:fs/promises') return { stat: async () => {} }
+      if (name === 'electron') return {
+        app: {
+          setAppUserModelId: (id: string) => appIds.push(id),
+          whenReady: () => ({ then: (fn: () => void) => { fn() } }),
+          on: () => {},
+        },
+        BrowserWindow: class {
+          options: Record<string, unknown>
+          constructor(options: Record<string, unknown>) {
+            this.options = options
+            Object.assign(this, {
+              webContents: { setWindowOpenHandler: () => {}, on: () => {} },
+            })
+            windows.push(this)
+          }
+          setMenuBarVisibility() {}
+          setAppDetails(details: Record<string, unknown>) { windows[0].details = details }
+          loadURL() {}
+          static fromWebContents() { return null }
+        },
+        dialog: {}, ipcMain: { handle: () => {} }, shell: { openExternal: () => {} },
+      }
+      throw new Error(name)
+    },
+    process: { platform: 'win32', env: { GROK_WEB_ICON: icon } },
+    URL, __dirname: path.resolve('electron'),
+  })
+
+  assert.deepEqual(appIds, ['com.grokbuild.web.desktop.v3'])
+  assert.equal(windows.length, 1)
+  assert.equal(windows[0].options.icon, icon)
+  assert.equal(windows[0].details?.appId, appIds[0])
+  assert.equal(windows[0].details?.appIconPath, icon)
+  assert.equal(windows[0].details?.appIconIndex, 0)
+})

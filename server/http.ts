@@ -891,7 +891,8 @@ async function handle(
   const cancel = match(method, path, 'POST', '/api/sessions/:id/cancel')
   if (cancel) {
     const sessionId = assertSafeSessionId(cancel.id)
-    await acp.request('session/cancel', { sessionId }).catch(() => undefined)
+    // ACP cancellation is a notification; there is no JSON-RPC response to await.
+    await acp.notify('session/cancel', { sessionId })
     acp.cancelPermissions(sessionId)
     sendJson(res, 200, { ok: true })
     return

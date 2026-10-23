@@ -1,14 +1,16 @@
-import { useEffect, type CSSProperties } from 'react'
+import { lazy, Suspense, useEffect, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { ChatPane } from './components/ChatPane'
-import { CommandPalette } from './components/CommandPalette'
-import { NewProjectDialog } from './components/NewProjectDialog'
-import { PermissionDialog } from './components/PermissionDialog'
 import { RightRail } from './components/RightRail'
-import { Settings } from './components/Settings'
 import { Sidebar } from './components/Sidebar'
-import { IconCheck } from './icons'
+import { IconCheck, IconClose, IconInfo } from './icons'
 import { useWorkspace } from './workspace'
+
+// 弹窗组件懒加载：首屏只加载核心 UI，弹窗按需加载
+const Settings = lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })))
+const NewProjectDialog = lazy(() => import('./components/NewProjectDialog').then(m => ({ default: m.NewProjectDialog })))
+const PermissionDialog = lazy(() => import('./components/PermissionDialog').then(m => ({ default: m.PermissionDialog })))
+const CommandPalette = lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
 
 function Shortcuts() {
   const { settingsOpen, openRightPanel, paletteOpen, setPaletteOpen } = useWorkspace(
@@ -59,15 +61,19 @@ function Toast() {
   if (!toast) return null
   return createPortal(
     <div
-      className={['toast', toast.kind === 'success' ? 'is-success' : '', toast.kind === 'error' ? 'is-error' : ''].filter(Boolean).join(' ')}
+      className={['toast', `is-${toast.kind}`].join(' ')}
       role="status"
     >
-      {toast.kind === 'success' ? (
-        <span className="toast-mark">
+      <span className={['toast-mark', `is-${toast.kind}`].join(' ')}>
+        {toast.kind === 'error' ? (
+          <IconClose />
+        ) : toast.kind === 'info' ? (
+          <IconInfo />
+        ) : (
           <IconCheck />
-        </span>
-      ) : null}
-      <span>{toast.text}</span>
+        )}
+      </span>
+      <span className="toast-text">{toast.text}</span>
     </div>,
     document.body,
   )
@@ -90,16 +96,21 @@ function MobileScrim() {
 }
 
 export default function App() {
-  const { settingsOpen, settingsPage, toast, sidebarWidth, rightRailWidth } = useWorkspace(
+  const { settingsOpen, settingsPage, toast, sidebarWidth, rightRailWidth, theme } = useWorkspace(
     'settingsOpen',
     'settingsPage',
     'toast',
     'sidebarWidth',
     'rightRailWidth',
+    'theme',
   )
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+  }, [theme])
   return (
     <div
-      className="app"
+      className={`app theme-${theme}`}
+      data-theme={theme}
       style={
         {
           '--sidebar-w': `${sidebarWidth}px`,
@@ -111,10 +122,12 @@ export default function App() {
       <Sidebar />
       <ChatPane />
       <RightRail />
-      {settingsOpen ? <Settings key={settingsPage} /> : null}
-      <NewProjectDialog />
-      <PermissionDialog />
-      <CommandPalette />
+      <Suspense fallback={null}>
+        {settingsOpen ? <Settings key={settingsPage} /> : null}
+        <NewProjectDialog />
+        <PermissionDialog />
+        <CommandPalette />
+      </Suspense>
       <MobileScrim />
       {toast ? <Toast key={toast.id} /> : null}
     </div>

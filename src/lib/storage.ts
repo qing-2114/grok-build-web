@@ -4,6 +4,7 @@ import type {
   Profile,
   Project,
   Session,
+  ThemeMode,
 } from '../types'
 import { uid } from './uid'
 
@@ -34,6 +35,7 @@ export type Persisted = {
   sidebarWidth?: number
   rightRailWidth?: number
   notifyDone?: boolean
+  theme?: ThemeMode
 }
 
 function asText(value: unknown): string {
@@ -105,6 +107,10 @@ function normaliseEffort(value: unknown): EffortLevel {
     : 'high'
 }
 
+function normaliseTheme(value: unknown): ThemeMode {
+  return value === 'light' ? 'light' : 'dark'
+}
+
 export function loadState(): Persisted | null {
   try {
     const raw =
@@ -133,6 +139,7 @@ export function loadState(): Persisted | null {
       sidebarWidth: normaliseWidth(parsed.sidebarWidth),
       rightRailWidth: normaliseWidth(parsed.rightRailWidth),
       notifyDone: parsed.notifyDone !== false,
+      theme: normaliseTheme(parsed.theme),
     }
   } catch {
     return null

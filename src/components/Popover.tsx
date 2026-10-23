@@ -79,13 +79,15 @@ export function Popover({
     }
   }, [open, portal, align])
 
+  const isReady = !portal || pos !== null
   const menu = open ? (
     <div
       ref={menuRef}
-      className={['menu', portal ? 'is-portal' : '', menuClassName]
+      className={['menu', portal ? 'is-portal' : '', isReady ? 'is-ready' : '', menuClassName]
         .filter(Boolean)
         .join(' ')}
       role="menu"
+      data-align={align}
       style={
         portal && pos
           ? { top: pos.top, left: pos.left }

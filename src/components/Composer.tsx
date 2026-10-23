@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useId,
   useLayoutEffect,
@@ -74,7 +75,7 @@ type Attachment = {
  */
 const SEND_STOP_GRACE_MS = 400
 
-function ContextRing({ usage }: { usage: ContextUsage | null }) {
+const ContextRing = memo(function ContextRing({ usage }: { usage: ContextUsage | null }) {
   const used = usage?.used ?? 0
   const total = usage?.total ?? 0
   const percent = Math.min(100, Math.max(0, usage?.percent ?? 0))
@@ -116,14 +117,14 @@ function ContextRing({ usage }: { usage: ContextUsage | null }) {
       </span>
     </span>
   )
-}
+})
 
 function extOf(name: string): string {
   const i = name.lastIndexOf('.')
   return i >= 0 ? name.slice(i + 1).toLowerCase() : ''
 }
 
-function ModelMenu({ close }: { close: () => void }) {
+const ModelMenu = memo(function ModelMenu({ close }: { close: () => void }) {
   const { model, effort, setModel, setEffort, models } = useWorkspace(
     'model',
     'effort',
@@ -141,30 +142,16 @@ function ModelMenu({ close }: { close: () => void }) {
 
   useLayoutEffect(() => {
     const flyout = flyoutRef.current
-    const menu = menuRef.current
-    if (!effortOpen || !flyout || !menu) return
+    const picker = menuRef.current
+    const outerMenu = picker?.closest<HTMLElement>('.model-menu')
+    if (!effortOpen || !flyout || !picker || !outerMenu) return
 
-    flyout.classList.remove('is-left')
-    flyout.style.top = 'auto'
-    flyout.style.bottom = '0px'
+    outerMenu.style.translate = '0 0'
+    const overflow = flyout.getBoundingClientRect().right - window.innerWidth + 12
+    if (overflow > 0) outerMenu.style.translate = `${-overflow}px 0`
 
-    const pad = 12
-    const vw = window.innerWidth
-    const vh = window.innerHeight
-    const menuRect = menu.getBoundingClientRect()
-    const fw = flyout.offsetWidth
-
-    if (menuRect.right + 6 + fw > vw - pad) {
-      flyout.classList.add('is-left')
-    }
-
-    const next = flyout.getBoundingClientRect()
-    if (next.top < pad) {
-      flyout.style.bottom = 'auto'
-      flyout.style.top = `${pad - menuRect.top}px`
-    } else if (next.bottom > vh - pad) {
-      const overflow = next.bottom - (vh - pad)
-      flyout.style.bottom = `${overflow}px`
+    return () => {
+      outerMenu.style.translate = ''
     }
   }, [effortOpen, model, effort])
 
@@ -217,7 +204,7 @@ function ModelMenu({ close }: { close: () => void }) {
       ) : null}
     </div>
   )
-}
+})
 
 function extTone(ext: string): string {
   if (['xls', 'xlsx', 'csv'].includes(ext)) return 'green'

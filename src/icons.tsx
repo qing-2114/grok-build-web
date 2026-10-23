@@ -46,6 +46,23 @@ export function IconInfo(props: IconProps) {
   )
 }
 
+export function IconSun(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="2.8" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M8 1.8v1.35M8 12.85v1.35M1.8 8h1.35M12.85 8h1.35M3.6 3.6l.95.95M11.45 11.45l.95.95M12.4 3.6l-.95.95M4.55 11.45l-.95.95" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
+export function IconMoon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M12.65 10.85A5.2 5.2 0 0 1 5.15 3.35 5.9 5.9 0 1 0 12.65 10.85Z" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round" />
+    </Svg>
+  )
+}
+
 export function IconGrok(props: IconProps) {
   return (
     <svg

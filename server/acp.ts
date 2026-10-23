@@ -163,6 +163,18 @@ export class GrokAcp extends EventEmitter {
     })
   }
 
+  notify(method: string, params: Record<string, unknown> = {}): Promise<void> {
+    if (!this.proc || !this.connected) {
+      return Promise.reject(new Error('本机 Grok Build 未连接'))
+    }
+    return new Promise((resolve, reject) => {
+      this.proc!.stdin.write(
+        JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n',
+        (err) => err ? reject(err) : resolve(),
+      )
+    })
+  }
+
   respond(id: JsonRpcId, result: unknown): void {
     if (!this.proc) return
     this.proc.stdin.write(

@@ -50,6 +50,7 @@ import {
 } from './lib/notify'
 import { openExternal, revealInExplorer as revealPath } from './lib/fs'
 import { fileManagerName } from './lib/platform'
+import { prepareQueuedSend } from './lib/queued-send'
 
 import { MODELS } from './types'
 import type {
@@ -61,6 +62,7 @@ import type {
   Project,
   RightPanel,
   Session,
+  ThemeMode,
 } from './types'
 import {
   initialState,
@@ -114,6 +116,7 @@ type WorkspaceActions = {
   setMode: (mode: PermissionMode) => void
   setModel: (model: string) => void
   setEffort: (effort: EffortLevel) => void
+  setTheme: (theme: ThemeMode) => void
   toggleSidebar: () => void
   setMobileNav: (open: boolean) => void
   setProjectDialog: (open: boolean, editId?: string | null) => void
@@ -136,8 +139,8 @@ type WorkspaceActions = {
   setTerminalShell: (id: string) => void
   setSidebarWidth: (width: number) => void
   setRightRailWidth: (width: number) => void
-  /** 把这条用户消息（文字 + 图片）放回输入框 */
-  editMessage: (messageId: string) => void
+  /** 原地编辑用户消息后作为新消息重新发送（保留原消息图片） */
+  editMessage: (messageId: string, nextText?: string) => Promise<boolean>
   /** 重新发送当前会话最后一条用户消息 */
   retryLast: () => void
   exportSession: (id?: string) => void
@@ -166,6 +169,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const toastTimer = useRef(0)
   const loadGen = useRef(0)
   const promptAbort = useRef(new Map<string, AbortController>())
+  const promptStarted = useRef(new Set<string>())
   const userAbort = useRef(new Set<string>())
   const pendingSave = useRef<Persisted | null>(null)
   const saveTimer = useRef(0)
@@ -187,6 +191,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       sidebarWidth: state.sidebarWidth,
       rightRailWidth: state.rightRailWidth,
       notifyDone: state.notifyDone,
+      theme: state.theme,
     }
     window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => {
@@ -207,6 +212,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     state.sidebarWidth,
     state.rightRailWidth,
     state.notifyDone,
+    state.theme,
   ])
 
   const notify = useCallback(
@@ -599,6 +605,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
       const titleCwd = cwd
       let streamError = false
+      promptStarted.current.add(sessionId)
       void promptSession(
         sessionId,
         { text: payload, files: promptFiles },
@@ -652,6 +659,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           userAbort.current.delete(sessionId)
           if (promptAbort.current.get(sessionId) === ac) {
             promptAbort.current.delete(sessionId)
+            promptStarted.current.delete(sessionId)
           }
           dispatch({ type: 'thinking', sessionId, on: false })
           dispatch({ type: 'set-permission', request: null })
@@ -826,31 +834,35 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (queuedSending.current.has(id)) return
       const item = stateRef.current.outgoingQueue.find((q) => q.id === id)
       if (!item) return
+      if (stateRef.current.outgoingQueue.some((q) =>
+        q.sessionId === item.sessionId && queuedSending.current.has(q.id),
+      )) return
       queuedSending.current.add(id)
       void (async () => {
         try {
-          const sid = item.sessionId
-          if (!stateRef.current.sessions.some((s) => s.id === sid)) {
-            dispatch({ type: 'dequeue', id })
-            notify('会话已删除，无法发送', 'error')
-            return
-          }
-          if (stateRef.current.thinkingIds.includes(sid)) {
-            // Wait for the running turn instead of killing it.
-            const start = Date.now()
-            while (
-              stateRef.current.thinkingIds.includes(sid) &&
-              Date.now() - start < 8000
-            ) {
-              await new Promise((r) => window.setTimeout(r, 50))
+          const sid = await prepareQueuedSend(() => {
+            const current = stateRef.current.outgoingQueue.find((q) => q.id === id)
+            if (!current || !stateRef.current.sessions.some((s) => s.id === current.sessionId)) return null
+            return {
+              id: current.sessionId,
+              running: stateRef.current.thinkingIds.includes(current.sessionId) || promptAbort.current.has(current.sessionId),
+              remote: isGrokSessionId(current.sessionId) && promptStarted.current.has(current.sessionId),
             }
-            if (stateRef.current.thinkingIds.includes(sid)) {
-              notify('仍在生成中，稍后再试', 'error')
-              return
+          }, async (sessionId) => {
+            userAbort.current.add(sessionId)
+            try {
+              // Keep the stream open: an aborted fetch does not mean ACP has stopped.
+              await cancelSession(sessionId)
+            } catch (err) {
+              userAbort.current.delete(sessionId)
+              throw err
             }
-          }
+          })
+          if (!sid) return
           const ok = await send(item.text, item.files, sid)
           if (ok) dispatch({ type: 'dequeue', id })
+        } catch (err) {
+          notify(err instanceof Error ? err.message : '立即发送失败，消息已保留', 'error')
         } finally {
           queuedSending.current.delete(id)
         }
@@ -987,16 +999,43 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'set-sidebar-width', width }),
     setRightRailWidth: (width) =>
       dispatch({ type: 'set-right-rail-width', width }),
-    editMessage: (messageId) => {
+    editMessage: async (messageId, nextText) => {
       const snap = stateRef.current
-      const session = snap.sessions.find((s) => s.id === snap.activeSessionId)
+      const sid = snap.activeSessionId
+      const session = snap.sessions.find((s) => s.id === sid)
       const m = session?.messages.find((x) => x.id === messageId)
-      if (!m || m.role !== 'user') return
-      dispatch({
-        type: 'seed-composer',
-        text: m.images?.length ? stripImageTokens(m.content) : m.content,
-        images: m.images,
-      })
+      if (!session || !sid || !m || m.role !== 'user') return false
+      const rawText =
+        nextText !== undefined
+          ? nextText
+          : m.images?.length
+            ? stripImageTokens(m.content)
+            : m.content
+      const payload = rawText.trim()
+      let files: File[] = []
+      if (m.images?.length) {
+        try {
+          files = await chatImagesToFiles(m.images)
+        } catch {
+          notify('图片读取失败，只重发文字', 'error')
+        }
+      }
+      if (!payload && !files.length) return false
+      if (stateRef.current.thinkingIds.includes(sid)) {
+        if (!payload) return false
+        dispatch({
+          type: 'enqueue',
+          item: {
+            id: uid('wait'),
+            sessionId: sid,
+            text: payload,
+            files: files.length ? files : undefined,
+          },
+        })
+        notify('已加入等候发送')
+        return true
+      }
+      return send(payload, files, sid)
     },
     retryLast: () => {
       const snap = stateRef.current
@@ -1053,6 +1092,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         })
       }
     },
+    setTheme: (theme) => dispatch({ type: 'set-theme', theme }),
     setPaletteOpen: (open) => dispatch({ type: 'set-palette', open }),
     resolvePermission: (optionId) => {
       const req = stateRef.current.permissionRequest

@@ -1,4 +1,12 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react'
 import {
   IconChevron,
   IconCopy,
@@ -9,6 +17,7 @@ import {
   IconPencil,
   IconRetry,
   IconSidebar,
+  IconTerminal,
 } from '../icons'
 import { formatDuration, formatMarks } from '../lib/format'
 import { foldBefore } from '../lib/turns'
@@ -23,6 +32,7 @@ import { PathLink } from './PathLink'
 import { PlanCard } from './PlanCard'
 import { RichText } from './RichText'
 import { ToolDetailView } from './ToolDetail'
+import { ThemeToggle } from './ThemeToggle'
 
 function toolStatusLabel(status: ToolCall['status'] | string | undefined): string {
   if (status === 'failed') return '失败'
@@ -53,6 +63,14 @@ function sameChangeCard(a: ChangeCardProps, b: ChangeCardProps): boolean {
   )
 }
 
+function ToolIcon({ target }: { target?: string }) {
+  const isFile =
+    looksLikeFilePath(target ?? '') &&
+    !/\.(?:py|sh|bash|cmd|ps1|bat|exe)$/i.test(target ?? '')
+  if (isFile) return <IconFile />
+  return <IconTerminal />
+}
+
 const ChangeCard = memo(function ChangeCard({
   tools,
   sessionId,
@@ -70,22 +88,26 @@ const ChangeCard = memo(function ChangeCard({
 
   return (
     <div className={open || !many ? 'change-card' : 'change-card is-folded'}>
-      <button
-        type="button"
-        className="change-card-head"
-        onClick={() => many && setOpen((v) => !v)}
-        aria-expanded={many ? open : undefined}
-        disabled={!many}
-      >
-        <span>已调用 {tools.length} 个工具</span>
-        {many ? (
+      {many ? (
+        <button
+          type="button"
+          className="change-card-head"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+        >
+          <div className="change-head-left">
+            <IconTerminal className="change-head-icon" />
+            <span>已调用 {tools.length} 个工具</span>
+          </div>
           <IconChevron className={open ? 'is-open' : ''} />
-        ) : null}
-      </button>
+        </button>
+      ) : null}
       <ul>
         {visible.map((t) => {
           const status = t.tool?.status ?? 'running'
           const showing = detailIds.has(t.id)
+          const toolName = t.tool?.name
+          const hasCustomName = Boolean(toolName && toolName !== '工具')
           const toggleDetail = () =>
             setDetailIds((prev) => {
               const next = new Set(prev)
@@ -95,7 +117,14 @@ const ChangeCard = memo(function ChangeCard({
             })
           return (
             <li key={t.id} className={showing ? 'is-open' : undefined}>
-              <span className="change-name">{t.tool?.name}</span>
+              <div className="change-lead">
+                <span className="change-icon">
+                  <ToolIcon target={t.tool?.target} />
+                </span>
+                {hasCustomName ? (
+                  <span className="change-name-badge">{toolName}</span>
+                ) : null}
+              </div>
               {looksLikeFilePath(t.tool?.target ?? '') ? (
                 <PathLink
                   href={t.tool?.target ?? ''}
@@ -107,10 +136,13 @@ const ChangeCard = memo(function ChangeCard({
                   {t.tool?.target}
                 </PathLink>
               ) : (
-                <span className="change-target">{t.tool?.target}</span>
+                <span className="change-target" title={t.tool?.target}>
+                  {t.tool?.target}
+                </span>
               )}
               <span className={`change-status is-${status}`}>
-                {toolStatusLabel(status)}
+                <span className="change-dot" />
+                <span>{toolStatusLabel(status)}</span>
               </span>
               <button
                 type="button"
@@ -180,6 +212,103 @@ function StatusPill() {
 // 共用一个空数组，保证 RichText 的 memo 不会因为每次新建 [] 而失效。
 const NO_IMAGES: ChatImage[] = []
 
+function ThinkingMark() {
+  return (
+    <span className="thinking-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none">
+        <path d="M12 4.2c-1.4-1.2-3.6-.5-3.8 1.4-2.2-.2-3.4 2.3-2.1 4-1.8 1.4-1.3 4.2.8 4.8-.3 2.2 2.1 3.7 4 2.4V4.2Zm0 0c1.4-1.2 3.6-.5 3.8 1.4 2.2-.2 3.4 2.3 2.1 4 1.8 1.4 1.3 4.2-.8 4.8.3 2.2-2.1 3.7-4 2.4V4.2Z" stroke="currentColor" strokeWidth="1.45" strokeLinejoin="round" />
+        <path d="M9 8.2v2m0 2.5v1.1m6-5.6v2m0 2.5v1.1M10.2 11h3.6m-3.1 2.7h2.6" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+      </svg>
+    </span>
+  )
+}
+
+// AI 回复消息：memo 包裹，流式输出时只有内容变化的那条会重渲染
+function sameAssistantTurn(a: AssistantTurnProps, b: AssistantTurnProps): boolean {
+  // 消息内容或状态变化才重渲染
+  if (a.message !== b.message) return false
+  if (a.retryId !== b.retryId) return false
+  // copyIds 和 images 是每次新建的 Set/数组，但内容相同时不需要重渲染
+  // 用 has() 检查比遍历 Set 更高效
+  const aCopy = a.copyIds.has(a.message.id)
+  const bCopy = b.copyIds.has(b.message.id)
+  if (aCopy !== bCopy) return false
+  // images 通常是同一个数组引用（NO_IMAGES）或来自同一条用户消息
+  if (a.images !== b.images && a.images.length !== b.images.length) return false
+  return true
+}
+
+type AssistantTurnProps = {
+  message: Message
+  images: ChatImage[]
+  copyIds: Set<string>
+  retryId: string | null
+  openLocalFile: (path: string) => void
+  openExternalUrl: (url: string) => void
+  revealInExplorer: (path: string) => void
+  onCopy: (text: string) => void
+  onRetry: () => void
+}
+
+const AssistantTurn = memo(function AssistantTurn({
+  message,
+  images,
+  copyIds,
+  retryId,
+  openLocalFile,
+  openExternalUrl,
+  revealInExplorer,
+  onCopy,
+  onRetry,
+}: AssistantTurnProps) {
+  return (
+    <article className="doc-turn">
+      <RichText
+        text={message.content}
+        images={images}
+        linkInlineFiles={copyIds.has(message.id)}
+        onOpenFile={openLocalFile}
+        onOpenUrl={openExternalUrl}
+        onReveal={revealInExplorer}
+      />
+      {copyIds.has(message.id) || message.usage ? (
+        <div className="doc-actions">
+          {copyIds.has(message.id) ? (
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="复制"
+              onClick={() => onCopy(message.content)}
+            >
+              <IconCopy />
+            </button>
+          ) : null}
+          {message.id === retryId ? (
+            <button
+              type="button"
+              className="icon-btn hint-up"
+              aria-label="重试"
+              data-hint="重新发送上一条消息"
+              onClick={onRetry}
+            >
+              <IconRetry />
+            </button>
+          ) : null}
+          {message.usage ? (
+            <span
+              className="turn-usage hint-up"
+              tabIndex={0}
+              data-hint={usageTitle(message.usage)}
+            >
+              {usageLabel(message.usage)}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  )
+}, sameAssistantTurn)
+
 function imagesBefore(messages: Message[], index: number): ChatImage[] {
   for (let i = index; i >= 0; i--) {
     if (messages[i].role !== 'user') continue
@@ -189,26 +318,95 @@ function imagesBefore(messages: Message[], index: number): ChatImage[] {
   return NO_IMAGES
 }
 
+type UserPromptProps = {
+  message: Message
+  onEdit: (id: string, text: string) => Promise<boolean>
+  onCopy: (text: string) => void
+}
+
+function sameUserPrompt(a: UserPromptProps, b: UserPromptProps): boolean {
+  return a.message === b.message
+}
+
 const UserPrompt = memo(function UserPrompt({
   message,
   onEdit,
-}: {
-  message: Message
-  onEdit: (id: string) => void
-}) {
+  onCopy,
+}: UserPromptProps) {
   const images = message.images ?? []
   const attachments = message.attachments ?? []
   const text = images.length
     ? stripImageTokens(message.content)
     : message.content
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(text)
+  const [submitting, setSubmitting] = useState(false)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  useLayoutEffect(() => {
+    if (!editing) return
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 44), 260)}px`
+  }, [editing, draft])
+
+  useEffect(() => {
+    if (!editing) return
+    const el = inputRef.current
+    if (!el) return
+    el.focus()
+    const end = el.value.length
+    el.setSelectionRange(end, end)
+  }, [editing])
+
+  function startEdit() {
+    setDraft(text)
+    setEditing(true)
+  }
+
+  function cancelEdit() {
+    if (submitting) return
+    setEditing(false)
+    setDraft(text)
+  }
+
+  async function submitEdit() {
+    if (submitting) return
+    const next = draft.trim()
+    if (!next && images.length === 0) return
+    setSubmitting(true)
+    try {
+      const ok = await onEdit(message.id, draft)
+      if (ok) setEditing(false)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.nativeEvent.isComposing || e.key === 'Process') return
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelEdit()
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      void submitEdit()
+    }
+  }
+
+  const rootClass = [
+    'follow-prompt',
+    images.length || attachments.length ? 'has-attachments' : '',
+    editing ? 'is-editing' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <div
-      className={
-        images.length || attachments.length
-          ? 'follow-prompt has-attachments'
-          : 'follow-prompt'
-      }
-    >
+    <div className={rootClass}>
       {attachments.length > 0 ? (
         <div className="prompt-attachments">
           {attachments.map((file, index) => (
@@ -240,21 +438,71 @@ const UserPrompt = memo(function UserPrompt({
           ))}
         </div>
       ) : null}
-      {text ? <div className="follow-prompt-text">{text}</div> : null}
-      <div className="prompt-actions">
-        <button
-          type="button"
-          className="icon-btn hint-up"
-          aria-label="编辑后重发"
-          data-hint="放回输入框，改完再发（不会撤回已有回复）"
-          onClick={() => onEdit(message.id)}
-        >
-          <IconPencil />
-        </button>
-      </div>
+      {editing ? (
+        <div className="follow-prompt-editor">
+          <textarea
+            ref={inputRef}
+            className="follow-prompt-input"
+            value={draft}
+            rows={1}
+            disabled={submitting}
+            placeholder="输入消息内容…"
+            aria-label="编辑消息内容"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+          />
+          <div className="follow-prompt-edit-foot">
+            <span className="follow-prompt-edit-hint">
+              Enter 发送 · Shift+Enter 换行 · Esc 取消
+            </span>
+            <div className="follow-prompt-edit-actions">
+              <button
+                type="button"
+                className="prompt-edit-btn is-cancel"
+                disabled={submitting}
+                onClick={cancelEdit}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="prompt-edit-btn is-submit"
+                disabled={submitting || (!draft.trim() && images.length === 0)}
+                onClick={() => void submitEdit()}
+              >
+                发送
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {text ? <div className="follow-prompt-text">{text}</div> : null}
+          <div className="prompt-actions">
+            <button
+              type="button"
+              className="icon-btn hint-up"
+              aria-label="复制"
+              data-hint="复制消息"
+              onClick={() => onCopy(text || message.content)}
+            >
+              <IconCopy />
+            </button>
+            <button
+              type="button"
+              className="icon-btn hint-up"
+              aria-label="编辑后重发"
+              data-hint="原地编辑并重新发送"
+              onClick={startEdit}
+            >
+              <IconPencil />
+            </button>
+          </div>
+        </>
+      )}
     </div>
   )
-})
+}, sameUserPrompt)
 
 function formatAttachmentSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 1024) return `${Math.max(0, bytes | 0)} B`
@@ -428,50 +676,18 @@ export function ChatPane() {
         continue
       }
       into.push(
-        <article key={m.id} className="doc-turn">
-          <RichText
-            text={m.content}
-            images={imagesBefore(messages, i)}
-            linkInlineFiles={copyIds.has(m.id)}
-            onOpenFile={openLocalFile}
-            onOpenUrl={openExternalUrl}
-            onReveal={revealInExplorer}
-          />
-          {copyIds.has(m.id) || m.usage ? (
-            <div className="doc-actions">
-              {copyIds.has(m.id) ? (
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-label="复制"
-                  onClick={() => copyText(m.content)}
-                >
-                  <IconCopy />
-                </button>
-              ) : null}
-              {m.id === retryId ? (
-                <button
-                  type="button"
-                  className="icon-btn hint-up"
-                  aria-label="重试"
-                  data-hint="重新发送上一条消息"
-                  onClick={retryLast}
-                >
-                  <IconRetry />
-                </button>
-              ) : null}
-              {m.usage ? (
-                <span
-                  className="turn-usage hint-up"
-                  tabIndex={0}
-                  data-hint={usageTitle(m.usage)}
-                >
-                  {usageLabel(m.usage)}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-        </article>,
+        <AssistantTurn
+          key={m.id}
+          message={m}
+          images={imagesBefore(messages, i)}
+          copyIds={copyIds}
+          retryId={retryId}
+          openLocalFile={openLocalFile}
+          openExternalUrl={openExternalUrl}
+          revealInExplorer={revealInExplorer}
+          onCopy={copyText}
+          onRetry={retryLast}
+        />,
       )
       i += 1
     }
@@ -483,8 +699,14 @@ export function ChatPane() {
     while (i < messages.length) {
       const m = messages[i]
       if (m.role === 'user') {
-        nodes.push(<UserPrompt key={m.id} message={m} onEdit={editMessage} />)
-        nodes.push(<hr key={`${m.id}-split`} className="turn-split" />)
+        nodes.push(
+          <UserPrompt
+            key={m.id}
+            message={m}
+            onEdit={editMessage}
+            onCopy={copyText}
+          />,
+        )
         i += 1
         continue
       }
@@ -546,6 +768,7 @@ export function ChatPane() {
               <IconSidebar />
             </button>
             <StatusPill />
+            <ThemeToggle />
             <button
               type="button"
               className={rightRailOpen ? 'icon-btn is-active' : 'icon-btn'}
@@ -557,7 +780,7 @@ export function ChatPane() {
           </header>
           <div className="empty">
             <div className="empty-glyph">
-              <img src="/grok-icon.png" alt="" />
+              <img src="/grok-icon.png" alt="Grok" />
             </div>
             <h1 className="empty-title">
               {emptyProject ? (
@@ -613,6 +836,7 @@ export function ChatPane() {
             </div>
             <div className="doc-top-right">
               <StatusPill />
+              <ThemeToggle />
               <button
                 type="button"
                 className={rightRailOpen ? 'icon-btn is-active' : 'icon-btn'}
@@ -644,9 +868,7 @@ export function ChatPane() {
               ) : null}
               {isThinking ? (
                 <div className="thinking">
-                  <span className="who-mark">
-                    <img src="/grok-icon.png" alt="" />
-                  </span>
+                  <ThinkingMark />
                   <span className="thinking-label">正在思考</span>
                 </div>
               ) : null}

@@ -2,6 +2,8 @@ export type PermissionMode = 'ask' | 'plan' | 'auto' | 'always-approve'
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh'
 
+export type ThemeMode = 'dark' | 'light'
+
 export type Role = 'user' | 'assistant' | 'tool'
 
 export type ToolCall = {

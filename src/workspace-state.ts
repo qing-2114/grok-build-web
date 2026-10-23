@@ -29,6 +29,7 @@ import type {
   RightPanel,
   RightTab,
   Session,
+  ThemeMode,
 } from './types'
 export const DEFAULT_PROFILE: Profile = { name: 'local', avatar: null }
 
@@ -42,6 +43,7 @@ export type WorkspaceState = {
   permissionMode: PermissionMode
   model: string
   effort: EffortLevel
+  theme: ThemeMode
   search: string
   sidebarCollapsed: boolean
   mobileNavOpen: boolean
@@ -119,6 +121,7 @@ export type Action =
   | { type: 'set-mode'; mode: PermissionMode }
   | { type: 'set-model'; model: string }
   | { type: 'set-effort'; effort: EffortLevel }
+  | { type: 'set-theme'; theme: ThemeMode }
   | { type: 'toggle-sidebar' }
   | { type: 'set-mobile-nav'; open: boolean }
   | { type: 'set-project-dialog'; open: boolean; editId?: string | null }
@@ -257,6 +260,7 @@ export function initialState(): WorkspaceState {
     permissionMode: stored?.permissionMode ?? 'ask',
     model: stored?.model ?? DEFAULT_MODEL,
     effort: stored?.effort ?? 'high',
+    theme: stored?.theme ?? 'dark',
     search: '',
     sidebarCollapsed: false,
     mobileNavOpen: false,
@@ -846,6 +850,8 @@ export function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         ...state,
         effort: clampEffort(state.model, action.effort, state.agentModels),
       }
+    case 'set-theme':
+      return { ...state, theme: action.theme }
     case 'toggle-sidebar':
       return { ...state, sidebarCollapsed: !state.sidebarCollapsed }
     case 'set-mobile-nav':

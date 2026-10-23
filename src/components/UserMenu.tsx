@@ -72,7 +72,7 @@ export function UserMenu() {
         ? createPortal(
             <div
               ref={menuRef}
-              className="user-menu"
+              className="user-menu is-ready"
               role="menu"
               style={{ bottom: pos.bottom, left: pos.left }}
             >

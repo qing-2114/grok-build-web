@@ -267,8 +267,8 @@ describe('set-agent-models', () => {
       type: 'set-agent-models',
       currentModelId: 'grok-4.7',
       models: [
-        { id: 'grok-4.6', name: 'grok-4.6', efforts: ['high'] },
-        { id: 'grok-4.7', name: 'grok-4.7', efforts: ['high'] },
+        { id: 'grok-4.6', label: 'grok-4.6', efforts: ['high'] },
+        { id: 'grok-4.7', label: 'grok-4.7', efforts: ['high'] },
       ],
     })
     assert.equal(after.model, 'grok-4.6')

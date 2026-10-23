@@ -121,6 +121,11 @@ b {
   background: rgba(255, 255, 255, 0.18);
 }
 
+/* 浅色主题底色接近白色，半透明白的选区会完全看不见，看起来像「选不中」。 */
+:root[data-theme='light'] ::selection {
+  background: rgba(36, 95, 196, 0.24);
+}
+
 :focus-visible {
   outline: 1px solid rgba(255, 255, 255, 0.55);
   outline-offset: 2px;

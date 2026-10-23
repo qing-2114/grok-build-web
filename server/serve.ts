@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { extname, join, normalize, resolve, sep } from 'node:path'
+import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { GrokAcp } from './acp.ts'
 import { checkApiRequest, HttpError } from './guard.ts'
 import { createRouter } from './http.ts'
@@ -75,8 +75,9 @@ export function startDesktopServer(
   distDir: string,
   acp: GrokAcp,
   port = 5173,
+  root = dirname(resolve(distDir)),
 ): Promise<DesktopServer> {
-  const router = createRouter(acp)
+  const router = createRouter(acp, { root: resolve(root), mode: 'desktop' })
   const indexFile = join(distDir, 'index.html')
 
   const server = createServer((req, res) => {

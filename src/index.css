@@ -993,6 +993,8 @@ b {
   flex: 1;
   overflow: auto;
   padding: 8px 0 8px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .thread::-webkit-scrollbar {
@@ -1022,6 +1024,15 @@ b {
   box-shadow: none;
   border-radius: 0;
   animation: doc-in var(--motion-enter) var(--motion-ease) both;
+}
+
+/* 聊天正文是可复制的文档内容；显式声明，避免桌面壳或交互容器的
+   user-select 规则让鼠标拖选失效。按钮和图片链接仍保持各自的交互行为。 */
+.doc-turn .prose,
+.follow-prompt-text,
+.composer-box textarea {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 :root[data-theme='light'] .doc-turn {
@@ -3454,7 +3465,6 @@ b {
 html.is-col-resizing,
 html.is-col-resizing * {
   cursor: col-resize !important;
-  user-select: none !important;
 }
 
 html.is-col-resizing .sidebar {

@@ -169,6 +169,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const toastTimer = useRef(0)
   const loadGen = useRef(0)
   const promptAbort = useRef(new Map<string, AbortController>())
+  const refreshAgentSeq = useRef(0)
   const promptStarted = useRef(new Set<string>())
   const userAbort = useRef(new Set<string>())
   const pendingSave = useRef<Persisted | null>(null)
@@ -613,6 +614,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           files: promptFiles,
           model: snap.model,
           effort: snap.effort,
+          cwd,
         },
         (event) => {
           if (event.type === 'permission') {
@@ -894,7 +896,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         (s) => s.id === stateRef.current.activeSessionId,
       )
       if (session?.source === 'grok') {
-        void setRemoteConfig(session.id, { model }).catch((err: unknown) => {
+        void setRemoteConfig(session.id, { model }, session.cwd).catch((err: unknown) => {
           notify(err instanceof Error ? err.message : '切换模型失败', 'error')
         })
       }
@@ -905,7 +907,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         (s) => s.id === stateRef.current.activeSessionId,
       )
       if (session?.source === 'grok') {
-        void setRemoteConfig(session.id, { effort }).catch((err: unknown) => {
+        void setRemoteConfig(session.id, { effort }, session.cwd).catch((err: unknown) => {
           notify(err instanceof Error ? err.message : '切换思考强度失败', 'error')
         })
       }
@@ -917,8 +919,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setSettingsOpen: (open, page) => dispatch({ type: 'set-settings', open, page }),
     setProfile: (profile) => dispatch({ type: 'set-profile', profile }),
     refreshAgent: async () => {
+      const seq = ++refreshAgentSeq.current
       try {
         const status = await fetchStatus()
+        if (seq !== refreshAgentSeq.current) return
         if (!status.connected) {
           dispatch({
             type: 'set-connection',
@@ -942,6 +946,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           currentModelId: status.currentModelId,
         })
       } catch (err) {
+        if (seq !== refreshAgentSeq.current) return
         dispatch({
           type: 'set-connection',
           connection: 'error',

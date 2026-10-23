@@ -192,11 +192,12 @@ export async function deleteRemoteSession(id: string): Promise<void> {
 export async function setRemoteConfig(
   id: string,
   patch: { model?: string; effort?: EffortLevel },
+  cwd?: string,
 ): Promise<void> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/config`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
+    body: JSON.stringify({ ...patch, cwd }),
   })
   await parseJson(res)
 }
@@ -253,7 +254,13 @@ function parseFrame(line: string): StreamEvent | null {
 
 export async function promptSession(
   id: string,
-  input: { text: string; files?: PromptFile[]; model?: string; effort?: EffortLevel },
+  input: {
+    text: string
+    files?: PromptFile[]
+    model?: string
+    effort?: EffortLevel
+    cwd?: string
+  },
   onEvent: (ev: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {

@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent } from 'react'
+import { useEffect, useRef, type PointerEvent } from 'react'
 import { clampWidth } from '../lib/layout'
 
 export function ResizeHandle({
@@ -15,6 +15,20 @@ export function ResizeHandle({
   onChange: (width: number) => void
 }) {
   const drag = useRef<{ x: number; w: number } | null>(null)
+
+  function clearDrag() {
+    drag.current = null
+    document.documentElement.classList.remove('is-col-resizing')
+  }
+
+  useEffect(() => {
+    const onWindowBlur = () => clearDrag()
+    window.addEventListener('blur', onWindowBlur)
+    return () => {
+      window.removeEventListener('blur', onWindowBlur)
+      clearDrag()
+    }
+  }, [])
 
   function onPointerDown(e: PointerEvent<HTMLButtonElement>) {
     if (e.button !== 0) return
@@ -35,8 +49,7 @@ export function ResizeHandle({
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
-    drag.current = null
-    document.documentElement.classList.remove('is-col-resizing')
+    clearDrag()
   }
 
   return (
@@ -49,6 +62,7 @@ export function ResizeHandle({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onLostPointerCapture={clearDrag}
       onDoubleClick={() => onChange(fallback)}
     />
   )

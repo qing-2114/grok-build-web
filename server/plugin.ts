@@ -11,14 +11,14 @@ export function grokAcpPlugin(): Plugin {
     configureServer(server) {
       void acp.start().catch(() => undefined)
       server.middlewares.use(createApiGuard())
-      server.middlewares.use(createRouter(acp))
+      server.middlewares.use(createRouter(acp, { root: server.config.root, mode: 'development' }))
       const stop = () => acp.stop()
       server.httpServer?.once('close', stop)
     },
     configurePreviewServer(server) {
       void acp.start().catch(() => undefined)
       server.middlewares.use(createApiGuard())
-      server.middlewares.use(createRouter(acp))
+      server.middlewares.use(createRouter(acp, { root: server.config.root, mode: 'preview' }))
       const stop = () => acp.stop()
       server.httpServer?.once('close', stop)
     },

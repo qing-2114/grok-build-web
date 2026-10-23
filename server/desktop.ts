@@ -96,7 +96,7 @@ const acp = new GrokAcp()
 async function main(): Promise<void> {
   let server: Awaited<ReturnType<typeof startDesktopServer>>
   try {
-    server = await startDesktopServer(distDir, acp)
+    server = await startDesktopServer(distDir, acp, 5173, root)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'EADDRINUSE') {

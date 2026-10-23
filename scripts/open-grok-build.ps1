@@ -75,14 +75,21 @@ function Test-AppServing {
   $resp = $null
   $reader = $null
   try {
-    $req = [System.Net.HttpWebRequest]::Create('http://127.0.0.1:5173/api/status')
+    $script:ServingInstance = $null
+    $req = [System.Net.HttpWebRequest]::Create('http://127.0.0.1:5173/api/instance')
     $req.Timeout = 1500
     $req.ReadWriteTimeout = 1500
     $req.Method = 'GET'
     $resp = $req.GetResponse()
     $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
     $body = $reader.ReadToEnd()
-    return $body -match '"connected"'
+    $instance = $body | ConvertFrom-Json
+    $script:ServingInstance = $instance
+    if ($instance.app -ne 'grok-build-web' -or $instance.mode -ne 'desktop') { return $false }
+    if (-not $instance.root -or -not $instance.pid) { return $false }
+    $servedRoot = [System.IO.Path]::GetFullPath($instance.root).TrimEnd([char[]]'\/')
+    $expectedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]'\/')
+    return [string]::Equals($servedRoot, $expectedRoot, [System.StringComparison]::OrdinalIgnoreCase)
   } catch {
     return $false
   } finally {
@@ -166,10 +173,12 @@ function Start-AppWindow {
 }
 
 function Test-DesktopRunning {
+  if (-not (Test-AppServing)) { return $false }
   if (-not (Test-Path -LiteralPath $PidFile)) { return $false }
   $raw = (Get-Content -LiteralPath $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
   $procId = 0
   if (-not [int]::TryParse([string]$raw, [ref]$procId)) { return $false }
+  if ($procId -ne $script:ServingInstance.pid) { return $false }
   return $null -ne (Get-Process -Id $procId -ErrorAction SilentlyContinue)
 }
 
@@ -228,15 +237,20 @@ if (Test-DesktopRunning) {
   return
 }
 
-# 5173 上已经是这个工作台（开发服务，或窗口丢了但服务还在）时，
-# 不再绑第二次端口，直接把应用窗口打开。
+# Only reuse a desktop server from this exact checkout. A development server
+# from another worktree can expose the same API while serving an older UI.
 if (Test-AppServing) {
   Start-AppWindow
   return
 }
 if (Test-PortOpen) {
   $who = Get-PortOwner
-  $text = "端口 5173 已被占用，桌面窗口无法打开。"
+  $text = "端口 5173 已被其他服务占用，未打开页面，以免载入旧版或其他副本。"
+  $text += "`n快捷方式目录：$Root"
+  if ($script:ServingInstance -and $script:ServingInstance.root) {
+    $text += "`n占用服务目录：$($script:ServingInstance.root)"
+    $text += "`n运行模式：$($script:ServingInstance.mode)"
+  }
   if ($who) { $text += "`n$who" }
   $text += "`n可先运行 scripts\stop-grok-build.cmd，再打开快捷方式。"
   Show-Notice $text 48

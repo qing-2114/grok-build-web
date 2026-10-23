@@ -158,6 +158,23 @@ function toMillis(iso?: string): number {
   return Number.isFinite(t) ? t : Date.now()
 }
 
+function isUnknownSessionError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /unknown session|session id/i.test(message)
+}
+
+async function loadSessionForRequest(
+  acp: GrokAcp,
+  sessionId: string,
+  cwd: string,
+): Promise<void> {
+  await acp.request('session/load', {
+    sessionId,
+    cwd: normalizePath(cwd) || homedir(),
+    mcpServers: [],
+  })
+}
+
 async function deleteOnDisk(id: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const proc = spawn('grok', ['sessions', 'delete', id], {
@@ -236,7 +253,12 @@ async function gitWrite(res: ServerResponse, run: () => Promise<unknown>): Promi
   }
 }
 
-export function createRouter(acp: GrokAcp) {
+export type ServerInstance = {
+  root: string
+  mode: 'desktop' | 'development' | 'preview'
+}
+
+export function createRouter(acp: GrokAcp, instance?: ServerInstance) {
   return async function router(
     req: IncomingMessage,
     res: ServerResponse,
@@ -250,6 +272,10 @@ export function createRouter(acp: GrokAcp) {
     }
 
     try {
+      if (req.method === 'GET' && url.pathname === '/api/instance' && instance) {
+        sendJson(res, 200, { app: 'grok-build-web', ...instance, pid: process.pid })
+        return
+      }
       await handle(acp, req, res, url)
     } catch (err) {
       if (res.headersSent) {
@@ -832,10 +858,8 @@ async function handle(
     const body = await readJson(req)
     const sessionId = assertSafeSessionId(prompt.id)
     const blocks = buildPrompt(body)
-    // Apply the selection immediately before prompting. The UI also updates
-    // session config when the picker changes, but that request is asynchronous
-    // and can race with a prompt sent immediately afterward.
-    try {
+    const cwd = normalizePath(String(body.cwd ?? '')) || homedir()
+    const applyConfig = async () => {
       if (typeof body.model === 'string' && body.model) {
         await acp.request('session/set_config_option', {
           sessionId,
@@ -850,11 +874,18 @@ async function handle(
           value: body.effort,
         })
       }
+    }
+    try {
+      await applyConfig()
     } catch (err) {
-      sendJson(res, 400, {
-        error: err instanceof Error ? err.message : String(err),
-      })
-      return
+      if (!isUnknownSessionError(err)) {
+        sendJson(res, 400, {
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return
+      }
+      await loadSessionForRequest(acp, sessionId, cwd)
+      await applyConfig()
     }
     res.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -892,11 +923,22 @@ async function handle(
     acp.on('update', onUpdate)
     acp.on('permission', onPerm)
     try {
-      const result = await acp.request<{ stopReason?: string }>(
-        'session/prompt',
-        { sessionId, prompt: blocks },
-        PROMPT_IDLE_TIMEOUT_MS,
-      )
+      let result: { stopReason?: string }
+      try {
+        result = await acp.request<{ stopReason?: string }>(
+          'session/prompt',
+          { sessionId, prompt: blocks },
+          PROMPT_IDLE_TIMEOUT_MS,
+        )
+      } catch (err) {
+        if (!isUnknownSessionError(err)) throw err
+        await loadSessionForRequest(acp, sessionId, cwd)
+        result = await acp.request<{ stopReason?: string }>(
+          'session/prompt',
+          { sessionId, prompt: blocks },
+          PROMPT_IDLE_TIMEOUT_MS,
+        )
+      }
       write({ type: 'done', stopReason: result.stopReason || 'end_turn' })
     } catch (err) {
       write({
@@ -926,19 +968,32 @@ async function handle(
   if (config) {
     const sessionId = assertSafeSessionId(config.id)
     const body = await readJson(req)
-    if (typeof body.model === 'string' && body.model) {
-      await acp.request('session/set_config_option', {
-        sessionId,
-        configId: 'model',
-        value: body.model,
-      })
+    const apply = async () => {
+      if (typeof body.model === 'string' && body.model) {
+        await acp.request('session/set_config_option', {
+          sessionId,
+          configId: 'model',
+          value: body.model,
+        })
+      }
+      if (typeof body.effort === 'string' && body.effort) {
+        await acp.request('session/set_config_option', {
+          sessionId,
+          configId: 'reasoning_effort',
+          value: body.effort,
+        })
+      }
     }
-    if (typeof body.effort === 'string' && body.effort) {
-      await acp.request('session/set_config_option', {
+    try {
+      await apply()
+    } catch (err) {
+      if (!isUnknownSessionError(err)) throw err
+      await loadSessionForRequest(
+        acp,
         sessionId,
-        configId: 'reasoning_effort',
-        value: body.effort,
-      })
+        String(body.cwd ?? ''),
+      )
+      await apply()
     }
     sendJson(res, 200, { ok: true })
     return

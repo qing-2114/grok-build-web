@@ -608,7 +608,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       promptStarted.current.add(sessionId)
       void promptSession(
         sessionId,
-        { text: payload, files: promptFiles },
+        {
+          text: payload,
+          files: promptFiles,
+          model: snap.model,
+          effort: snap.effort,
+        },
         (event) => {
           if (event.type === 'permission') {
             dispatch({

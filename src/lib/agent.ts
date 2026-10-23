@@ -253,7 +253,7 @@ function parseFrame(line: string): StreamEvent | null {
 
 export async function promptSession(
   id: string,
-  input: { text: string; files?: PromptFile[] },
+  input: { text: string; files?: PromptFile[]; model?: string; effort?: EffortLevel },
   onEvent: (ev: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {

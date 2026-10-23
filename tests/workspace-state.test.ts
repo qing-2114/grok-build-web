@@ -258,3 +258,19 @@ describe('clampEffort', () => {
     assert.equal(clampEffort('missing', 'low', models as never), 'high')
   })
 })
+
+describe('set-agent-models', () => {
+  it('不会把用户选中的 grok-4.6 重置成 agent 默认模型', () => {
+    const before = initialState()
+    const selected = run(before, { type: 'set-model', model: 'grok-4.6' })
+    const after = run(selected, {
+      type: 'set-agent-models',
+      currentModelId: 'grok-4.7',
+      models: [
+        { id: 'grok-4.6', name: 'grok-4.6', efforts: ['high'] },
+        { id: 'grok-4.7', name: 'grok-4.7', efforts: ['high'] },
+      ],
+    })
+    assert.equal(after.model, 'grok-4.6')
+  })
+})

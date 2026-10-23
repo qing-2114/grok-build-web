@@ -814,8 +814,6 @@ export function reducer(state: WorkspaceState, action: Action): WorkspaceState {
       let model = state.model
       if (models.length && !models.some((m) => m.id === model)) {
         model = action.currentModelId || models[0].id
-      } else if (action.currentModelId && model === 'grok-4.6') {
-        model = action.currentModelId
       }
       return {
         ...state,

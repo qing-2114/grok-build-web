@@ -832,6 +832,30 @@ async function handle(
     const body = await readJson(req)
     const sessionId = assertSafeSessionId(prompt.id)
     const blocks = buildPrompt(body)
+    // Apply the selection immediately before prompting. The UI also updates
+    // session config when the picker changes, but that request is asynchronous
+    // and can race with a prompt sent immediately afterward.
+    try {
+      if (typeof body.model === 'string' && body.model) {
+        await acp.request('session/set_config_option', {
+          sessionId,
+          configId: 'model',
+          value: body.model,
+        })
+      }
+      if (typeof body.effort === 'string' && body.effort) {
+        await acp.request('session/set_config_option', {
+          sessionId,
+          configId: 'reasoning_effort',
+          value: body.effort,
+        })
+      }
+    } catch (err) {
+      sendJson(res, 400, {
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
     res.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
       'Cache-Control': 'no-store',

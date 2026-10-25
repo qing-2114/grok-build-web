@@ -28,6 +28,7 @@ import {
   promptSession,
   setRemoteConfig,
   type AgentModel,
+  type AgentStatus,
   type PromptFile,
 } from './lib/agent'
 import { isDemoMode } from './lib/demo'
@@ -160,6 +161,10 @@ type WorkspaceStore = {
 }
 
 const WorkspaceContext = createContext<WorkspaceStore | null>(null)
+
+// 已连接时多久探一次活；没连上时重试间隔的上限。
+const AGENT_HEALTH_MS = 10_000
+const AGENT_RETRY_MAX_MS = 15_000
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, initialState)
@@ -325,68 +330,128 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [notify])
 
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const status = await fetchStatus()
-        if (cancelled) return
-        if (!status.connected) {
-          dispatch({
-            type: 'set-connection',
-            connection: 'error',
-            error: status.error || '本机 Grok Build 未连接',
-            version: status.version,
-            home: status.home,
-          })
-          return
-        }
-        dispatch({
-          type: 'set-connection',
-          connection: 'connected',
-          error: null,
-          version: status.version,
-          home: status.home,
-        })
-        dispatch({
-          type: 'set-agent-models',
-          models: status.models,
-          currentModelId: status.currentModelId,
-        })
-        const remote = isDemoMode() ? [] : await fetchSessions()
-        if (cancelled) return
-        dispatch({ type: 'merge-remote', sessions: remote })
-        const storedId = loadState()?.activeSessionId
-        if (storedId && remote.some((s) => s.id === storedId)) {
-          const hit = remote.find((s) => s.id === storedId)
-          dispatch({ type: 'select-session', id: storedId })
-          if (hit) {
-            void hydrate({
-              id: hit.id,
-              title: hit.title,
-              projectId: null,
-              cwd: hit.cwd,
-              createdAt: hit.updatedAt,
-              updatedAt: hit.updatedAt,
-              messages: [],
-              source: 'grok',
-            })
-          }
-        }
-        await refreshGit(stateRef.current.projects)
-      } catch (err) {
-        if (cancelled) return
+  // 连接状态、版本号、模型列表只从这里写进 state。服务端只有 initialize 回过包才报
+  // connected，所以「已连接」一定带着版本号。没变化就不 dispatch，探活不会引起重渲染。
+  const applyStatus = useCallback((status: AgentStatus): boolean => {
+    const cur = stateRef.current
+    if (!status.connected) {
+      const error = status.error || '本机 Grok Build 未连接'
+      if (cur.connection !== 'error' || cur.connectionError !== error) {
         dispatch({
           type: 'set-connection',
           connection: 'error',
-          error: err instanceof Error ? err.message : String(err),
+          error,
+          version: status.version,
+          home: status.home,
         })
       }
-    })()
+      return false
+    }
+    if (
+      cur.connection !== 'connected' ||
+      cur.connectionError ||
+      cur.agentVersion !== status.version
+    ) {
+      dispatch({
+        type: 'set-connection',
+        connection: 'connected',
+        error: null,
+        version: status.version,
+        home: status.home,
+      })
+    }
+    if (JSON.stringify(cur.agentModels) !== JSON.stringify(status.models)) {
+      dispatch({
+        type: 'set-agent-models',
+        models: status.models,
+        currentModelId: status.currentModelId,
+      })
+    }
+    return true
+  }, [])
+
+  // 启动时连 agent：没连上按 1s → 2s → 4s … 最多 15s 重试；连上后先载入会话，之后每
+  // AGENT_HEALTH_MS 探一次活（/api/status 会顺手把退出的 agent 重新拉起来）。
+  useEffect(() => {
+    let cancelled = false
+    let timer = 0
+    let failures = 0
+    let loaded = false
+
+    const loadSessions = async () => {
+      const remote = isDemoMode() ? [] : await fetchSessions()
+      if (cancelled) return
+      dispatch({ type: 'merge-remote', sessions: remote })
+      const storedId = loadState()?.activeSessionId
+      if (storedId && remote.some((s) => s.id === storedId)) {
+        const hit = remote.find((s) => s.id === storedId)
+        dispatch({ type: 'select-session', id: storedId })
+        if (hit) {
+          void hydrate({
+            id: hit.id,
+            title: hit.title,
+            projectId: null,
+            cwd: hit.cwd,
+            createdAt: hit.updatedAt,
+            updatedAt: hit.updatedAt,
+            messages: [],
+            source: 'grok',
+          })
+        }
+      }
+      await refreshGit(stateRef.current.projects)
+    }
+
+    const tick = async () => {
+      let ok = false
+      if (loaded && document.hidden) {
+        ok = stateRef.current.connection === 'connected'
+      } else {
+        const seq = ++refreshAgentSeq.current
+        try {
+          const status = await fetchStatus()
+          if (cancelled) return
+          ok = seq === refreshAgentSeq.current ? applyStatus(status) : status.connected
+        } catch (err) {
+          if (cancelled) return
+          if (seq === refreshAgentSeq.current) {
+            dispatch({
+              type: 'set-connection',
+              connection: 'error',
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+        if (ok && !loaded) {
+          try {
+            await loadSessions()
+            if (cancelled) return
+            loaded = true
+          } catch (err) {
+            if (cancelled) return
+            ok = false
+            dispatch({
+              type: 'set-connection',
+              connection: 'error',
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+      }
+      if (cancelled) return
+      failures = ok ? 0 : failures + 1
+      const delay = ok
+        ? AGENT_HEALTH_MS
+        : Math.min(AGENT_RETRY_MAX_MS, 1000 * 2 ** Math.min(failures - 1, 4))
+      timer = window.setTimeout(() => void tick(), delay)
+    }
+
+    void tick()
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
-  }, [hydrate, refreshGit])
+  }, [applyStatus, hydrate, refreshGit])
 
   useEffect(() => {
     return () => {
@@ -923,28 +988,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       try {
         const status = await fetchStatus()
         if (seq !== refreshAgentSeq.current) return
-        if (!status.connected) {
-          dispatch({
-            type: 'set-connection',
-            connection: 'error',
-            error: status.error || '本机 Grok Build 未连接',
-            version: status.version,
-            home: status.home,
-          })
-        } else {
-          dispatch({
-            type: 'set-connection',
-            connection: 'connected',
-            error: null,
-            version: status.version,
-            home: status.home,
-          })
-        }
-        dispatch({
-          type: 'set-agent-models',
-          models: status.models,
-          currentModelId: status.currentModelId,
-        })
+        applyStatus(status)
       } catch (err) {
         if (seq !== refreshAgentSeq.current) return
         dispatch({
@@ -1112,7 +1156,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       })
       dispatch({ type: 'set-permission', request: null })
     },
-  }), [hydrate, notify, refreshGit, send])
+  }), [applyStatus, hydrate, notify, refreshGit, send])
 
   useEffect(() => {
     selectRef.current = actions.selectSession

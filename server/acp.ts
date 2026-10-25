@@ -70,6 +70,16 @@ export class GrokAcp extends EventEmitter {
     label: string
     efforts: string[]
   }> = []
+  // initialize 还没回包时 connected 仍是 false，但握手请求本身得能发出去。
+  private handshaking = false
+  private readonly command: string
+  private readonly args: string[]
+
+  constructor(command = 'grok', args = ['agent', '--no-leader', 'stdio']) {
+    super()
+    this.command = command
+    this.args = args
+  }
 
   start(): Promise<void> {
     if (this.connected && this.proc && !this.proc.killed) {
@@ -109,12 +119,16 @@ export class GrokAcp extends EventEmitter {
     await this.start()
   }
 
+  private writable(): boolean {
+    return Boolean(this.proc && (this.connected || this.handshaking))
+  }
+
   request<T = unknown>(
     method: string,
     params: Record<string, unknown> = {},
     timeoutMs = DEFAULT_TIMEOUT_MS,
   ): Promise<T> {
-    if (!this.proc || !this.connected) {
+    if (!this.writable()) {
       return Promise.reject(new Error('本机 Grok Build 未连接'))
     }
     const id = this.nextId++
@@ -164,7 +178,7 @@ export class GrokAcp extends EventEmitter {
   }
 
   notify(method: string, params: Record<string, unknown> = {}): Promise<void> {
-    if (!this.proc || !this.connected) {
+    if (!this.writable()) {
       return Promise.reject(new Error('本机 Grok Build 未连接'))
     }
     return new Promise((resolve, reject) => {
@@ -215,10 +229,11 @@ export class GrokAcp extends EventEmitter {
     this.lastError = null
     this.buf = ''
     this.nextId = 1
+    this.stderrTail = []
 
     const proc = spawn(
-      'grok',
-      ['agent', '--no-leader', 'stdio'],
+      this.command,
+      this.args,
       {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
@@ -252,20 +267,27 @@ export class GrokAcp extends EventEmitter {
       this.emit('disconnect', this.lastError)
     })
     proc.on('error', (err) => {
+      if (this.proc !== proc) return
+      // 拉起失败（找不到命令等）时不一定有 exit 事件，这里也要把进程清掉。
       this.lastError =
         err.message.includes('ENOENT')
           ? '找不到 grok 命令，请确认本机已安装 Grok Build 并在 PATH 中'
           : err.message
       this.connected = false
+      this.proc = null
+      for (const [, p] of this.pending) p.reject(new Error(this.lastError))
+      this.pending.clear()
       this.emit('disconnect', this.lastError)
     })
 
     await new Promise((r) => setTimeout(r, 200))
-    if (!this.proc) {
+    if (this.proc !== proc) {
       throw new Error(this.lastError || '无法启动 grok agent')
     }
 
-    this.connected = true
+    // 只有 initialize 回包（拿到版本号和模型列表）之后才算连上；在这之前
+    // /api/status 走 ensure() 会等这次握手，而不是先报一个没有版本号的「已连接」。
+    this.handshaking = true
     try {
       const init = await this.request<{
         protocolVersion?: number
@@ -297,12 +319,18 @@ export class GrokAcp extends EventEmitter {
           .map((e) => e.id || e.value || '')
           .filter(Boolean),
       }))
+      if (this.proc !== proc) {
+        throw new Error(this.lastError || 'grok agent 在握手时退出')
+      }
+      this.connected = true
       this.emit('ready')
     } catch (err) {
       this.connected = false
       this.lastError = err instanceof Error ? err.message : String(err)
       this.stop()
       throw err instanceof Error ? err : new Error(this.lastError)
+    } finally {
+      this.handshaking = false
     }
   }
 

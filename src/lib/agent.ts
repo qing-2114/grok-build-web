@@ -10,6 +10,8 @@ export type AgentModel = {
   id: string
   label: string
   efforts: EffortLevel[]
+  /** 来自「模型部署」里的自定义供应商；内置模型没有。 */
+  provider?: { id: string; name: string }
 }
 
 export type AgentStatus = {
@@ -92,7 +94,12 @@ export async function fetchStatus(): Promise<AgentStatus> {
     error?: string | null
     version?: string
     home?: string
-    models?: Array<{ id: string; label: string; efforts?: string[] }>
+    models?: Array<{
+      id: string
+      label: string
+      efforts?: string[]
+      provider?: { id?: string; name?: string }
+    }>
     currentModelId?: string
   }>(res)
   return {
@@ -107,6 +114,9 @@ export async function fetchStatus(): Promise<AgentStatus> {
       efforts: (m.efforts ?? [])
         .map(asEffort)
         .filter((e): e is EffortLevel => e != null),
+      ...(m.provider?.id
+        ? { provider: { id: m.provider.id, name: m.provider.name || m.provider.id } }
+        : {}),
     })),
   }
 }

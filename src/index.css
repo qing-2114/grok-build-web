@@ -2753,11 +2753,11 @@ b {
   transition: transform var(--motion-fast) var(--ease-out-expo);
 }
 
-.effort-flyout {
+.model-flyout {
   position: absolute;
   left: calc(100% + 6px);
-  bottom: 0;
-  top: auto;
+  top: 0;
+  bottom: auto;
   z-index: 21;
   min-width: 188px;
   max-height: min(360px, calc(100vh - 24px));
@@ -2770,7 +2770,116 @@ b {
   border: 1px solid var(--line-strong);
   box-shadow: var(--shadow-lg);
   animation: flyout-in var(--motion-enter) var(--ease-out-expo) both;
-  transform-origin: bottom left;
+  transform-origin: top left;
+}
+
+.model-list {
+  width: 268px;
+}
+
+.provider-flyout {
+  min-width: 200px;
+}
+
+.provider-flyout[data-stack='below'] {
+  left: 6px;
+  right: 6px;
+  top: 44px;
+  min-width: 0;
+}
+
+.menu-divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--line);
+}
+
+.menu .model-provider .model-provider-icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--ink-dim);
+}
+
+.menu .model-provider span {
+  font-weight: var(--w-medium);
+}
+
+.model-provider.is-open .sub-caret {
+  color: var(--ink);
+}
+
+.model-tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: var(--ink-mute);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+.menu .project-row .model-tag + .row-check {
+  margin-left: 2px;
+}
+
+.model-effort {
+  padding: 4px 6px 4px;
+}
+
+.model-effort-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 4px 8px;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+.model-effort-head strong {
+  font-size: 13px;
+  font-weight: var(--w-semibold);
+  color: var(--ink);
+}
+
+/* 思考强度：分段控件，选中段浮起（与 .deploy-toggle 同一种形状）。 */
+.effort-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+}
+
+.menu .effort-seg button {
+  flex: 1;
+  width: auto;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  font-size: 12px;
+  font-weight: var(--w-medium);
+  color: var(--ink-dim);
+}
+
+.menu .effort-seg button:hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+.menu .effort-seg button.is-on,
+.menu .effort-seg button.is-on:hover {
+  background: var(--segment);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+.model-effort-hint {
+  padding: 6px 4px 2px;
+  font-size: 11px;
+  color: var(--ink-mute);
 }
 
 .menu-section {
@@ -6309,7 +6418,7 @@ html.is-col-resizing .sidebar {
 
 .menu,
 .model-list,
-.effort-flyout,
+.model-flyout,
 .user-menu,
 .slash-menu,
 .palette,
@@ -6573,7 +6682,7 @@ html.is-col-resizing .sidebar {
 /* 同心圆角：6px 内边距 + 8px 行。 */
 .menu,
 .model-list,
-.effort-flyout,
+.model-flyout,
 .user-menu {
   border-radius: 14px;
 }

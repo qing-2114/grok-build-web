@@ -41,6 +41,7 @@ import {
   deleteProvider,
   fetchCatalog,
   listProviders,
+  modelOwners,
   parseProviderBody,
   probeEndpoint,
   saveProvider,
@@ -289,6 +290,20 @@ export function createRouter(acp: GrokAcp, instance?: ServerInstance) {
   }
 }
 
+// 模型选择器按供应商分组：内置模型不带 provider，自定义供应商的模型带上 id 和名字。
+async function statusModels(acp: GrokAcp) {
+  let owners = new Map<string, { id: string; name: string }>()
+  try {
+    owners = await modelOwners()
+  } catch {
+    // 读不了 config.toml 时退回不分组，模型照样能选
+  }
+  return acp.models.map((m) => {
+    const provider = owners.get(m.id)
+    return provider ? { ...m, provider } : m
+  })
+}
+
 async function handle(
   acp: GrokAcp,
   req: IncomingMessage,
@@ -307,7 +322,7 @@ async function handle(
         error: err instanceof Error ? err.message : String(err),
         version: acp.version,
         home: homedir(),
-        models: acp.models,
+        models: await statusModels(acp),
         currentModelId: acp.currentModelId,
       })
       return
@@ -317,7 +332,7 @@ async function handle(
       error: acp.lastError,
       version: acp.version,
       home: homedir(),
-      models: acp.models,
+      models: await statusModels(acp),
       currentModelId: acp.currentModelId,
     })
     return

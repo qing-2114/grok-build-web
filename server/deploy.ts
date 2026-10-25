@@ -550,6 +550,16 @@ export async function listProviders(): Promise<DeployProvider[]> {
   return groupProviders(parseRawModels(text).map(rawToModel), labels)
 }
 
+// 给 agent 返回的模型标上来自哪个自定义供应商（catalogId 就是 ACP 的模型 id）。
+// 只给 id 和名字，绝不把 API Key 带到浏览器。
+export async function modelOwners(): Promise<Map<string, { id: string; name: string }>> {
+  const owners = new Map<string, { id: string; name: string }>()
+  for (const p of await listProviders()) {
+    for (const m of p.models) owners.set(m.catalogId, { id: p.id, name: p.name })
+  }
+  return owners
+}
+
 function assertProviderId(id: string): string {
   const next = id.trim()
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(next)) {

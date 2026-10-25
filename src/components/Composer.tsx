@@ -11,6 +11,7 @@ import {
   type KeyboardEvent,
 } from 'react'
 import {
+  IconBox,
   IconCheck,
   IconChevron,
   IconClose,
@@ -41,6 +42,7 @@ import {
   type SlashOutcome,
 } from '../lib/slash'
 import { findFiles } from '../lib/fs'
+import { groupIdOf, groupModels } from '../lib/model-groups'
 import { formatMarks } from '../lib/format'
 import { chatImagesToFiles } from '../lib/images'
 import { uid } from '../lib/uid'
@@ -125,81 +127,153 @@ function extOf(name: string): string {
 }
 
 const ModelMenu = memo(function ModelMenu({ close }: { close: () => void }) {
-  const { model, effort, setModel, setEffort, models } = useWorkspace(
+  const { model, effort, setModel, setEffort, models, setSettingsOpen } = useWorkspace(
     'model',
     'effort',
     'setModel',
     'setEffort',
     'models',
+    'setSettingsOpen',
   )
-  const [effortOpen, setEffortOpen] = useState(false)
+  const groups = useMemo(() => groupModels(models), [models])
+  // 只是「正在看哪个供应商」，不改当前模型；每次打开菜单都回到当前模型所在的组。
+  const [viewId, setViewId] = useState(() => groupIdOf(groups, model))
+  const [providerOpen, setProviderOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const flyoutRef = useRef<HTMLDivElement>(null)
+  const view = groups.find((g) => g.id === viewId) ?? groups[0]
   const modelMeta = models.find((m) => m.id === model) ?? models[0]
   const effortOptions = EFFORTS.filter((e) =>
     (modelMeta?.efforts ?? []).includes(e.id),
   )
+  const effortMeta = effortOptions.find((e) => e.id === effort)
 
   useLayoutEffect(() => {
     const flyout = flyoutRef.current
     const picker = menuRef.current
     const outerMenu = picker?.closest<HTMLElement>('.model-menu')
-    if (!effortOpen || !flyout || !picker || !outerMenu) return
+    if (!providerOpen || !flyout || !picker || !outerMenu) return
 
+    // 先整体左移给子菜单腾地方；左边也贴边了还放不下（窄窗口），就叠到供应商行下面。
     outerMenu.style.translate = '0 0'
+    delete flyout.dataset.stack
     const overflow = flyout.getBoundingClientRect().right - window.innerWidth + 12
-    if (overflow > 0) outerMenu.style.translate = `${-overflow}px 0`
+    const room = Math.max(0, picker.getBoundingClientRect().left - 12)
+    const shift = Math.min(Math.max(0, overflow), room)
+    if (shift > 0) outerMenu.style.translate = `${-shift}px 0`
+    if (overflow > room) {
+      outerMenu.style.translate = '0 0'
+      flyout.dataset.stack = 'below'
+    }
 
     return () => {
       outerMenu.style.translate = ''
     }
-  }, [effortOpen, model, effort])
+  }, [providerOpen, groups.length])
 
   return (
     <div className="model-picker" ref={menuRef}>
       <div className="model-list">
-        {models.map((m) => {
-          const current = m.id === model
-          return (
+        {view ? (
+          <>
             <button
-              key={m.id}
               type="button"
               role="menuitem"
-              className={current ? 'project-row is-active' : 'project-row'}
-              onClick={() => {
-                if (current) {
-                  setEffortOpen((v) => !v)
-                  return
-                }
-                setModel(m.id)
-                setEffortOpen(false)
-              }}
+              aria-haspopup="menu"
+              aria-expanded={providerOpen}
+              className={
+                providerOpen ? 'project-row model-provider is-open' : 'project-row model-provider'
+              }
+              onClick={() => setProviderOpen((v) => !v)}
             >
-              <span>{m.label}</span>
-              {current ? <IconCheck className="row-check" /> : null}
-              {current ? <IconChevron className="sub-caret" /> : null}
+              <IconBox className="model-provider-icon" />
+              <span>{view.name}</span>
+              <small className="model-tag">{view.custom ? 'API' : '内置'}</small>
+              <IconChevron className="sub-caret" />
             </button>
-          )
-        })}
+            <div className="menu-divider" role="separator" />
+            <div className="menu-section">模型</div>
+            {view.models.map((m) => {
+              const current = m.id === model
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={current}
+                  className={current ? 'project-row is-active' : 'project-row'}
+                  onClick={() => {
+                    setProviderOpen(false)
+                    if (!current) setModel(m.id)
+                  }}
+                >
+                  <span>{m.label}</span>
+                  {current ? <IconCheck className="row-check" /> : null}
+                </button>
+              )
+            })}
+          </>
+        ) : null}
+        {effortOptions.length ? (
+          <>
+            <div className="menu-divider" role="separator" />
+            <div className="model-effort">
+              <div className="model-effort-head">
+                <span>思考强度</span>
+                <strong>{effortMeta?.label ?? ''}</strong>
+              </div>
+              <div className="effort-seg" role="group" aria-label="思考强度">
+                {effortOptions.map((e) => (
+                  <button
+                    key={e.id}
+                    type="button"
+                    aria-pressed={e.id === effort}
+                    className={e.id === effort ? 'is-on' : ''}
+                    onClick={() => setEffort(e.id)}
+                  >
+                    {e.label}
+                  </button>
+                ))}
+              </div>
+              {effortMeta ? <div className="model-effort-hint">{effortMeta.hint}</div> : null}
+            </div>
+          </>
+        ) : null}
       </div>
-      {effortOpen ? (
-        <div className="effort-flyout" ref={flyoutRef} role="menu">
-          <div className="menu-section">思考强度</div>
-          {effortOptions.map((e) => (
-            <button
-              key={e.id}
-              type="button"
-              role="menuitem"
-              className={e.id === effort ? 'is-active' : ''}
-              onClick={() => {
-                setEffort(e.id)
-                close()
-              }}
-            >
-              <strong>{e.label}</strong>
-              <em>{e.hint}</em>
-            </button>
-          ))}
+      {providerOpen ? (
+        <div className="model-flyout provider-flyout" ref={flyoutRef} role="menu">
+          {groups.map((g) => {
+            const viewing = g.id === view?.id
+            return (
+              <button
+                key={g.id || 'builtin'}
+                type="button"
+                role="menuitemradio"
+                aria-checked={viewing}
+                className={viewing ? 'project-row is-active' : 'project-row'}
+                onClick={() => {
+                  setViewId(g.id)
+                  setProviderOpen(false)
+                }}
+              >
+                <span>{g.name}</span>
+                <small className="model-tag">{g.custom ? 'API' : '内置'}</small>
+                {viewing ? <IconCheck className="row-check" /> : null}
+              </button>
+            )
+          })}
+          <div className="menu-divider" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            className="project-row"
+            onClick={() => {
+              close()
+              setSettingsOpen(true, 'deploy')
+            }}
+          >
+            <span>管理模型</span>
+          </button>
         </div>
       ) : null}
     </div>
@@ -1133,9 +1207,7 @@ export function Composer() {
                   </button>
                 )}
               >
-                {({ close }) => (
-                  <ModelMenu close={close} />
-                )}
+                {({ close }) => <ModelMenu close={close} />}
               </Popover>
             </div>
             <button

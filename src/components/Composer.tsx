@@ -50,6 +50,7 @@ import { EFFORTS, MODELS, PERMISSION_MODES } from '../types'
 import type { ContextUsage } from '../types'
 import { useWorkspace } from '../workspace'
 import { Popover } from './Popover'
+import { EffortSlider } from './EffortSlider'
 import { MentionMenu } from './MentionMenu'
 import { SlashMenu } from './SlashMenu'
 
@@ -222,19 +223,7 @@ const ModelMenu = memo(function ModelMenu({ close }: { close: () => void }) {
                 <span>思考强度</span>
                 <strong>{effortMeta?.label ?? ''}</strong>
               </div>
-              <div className="effort-seg" role="group" aria-label="思考强度">
-                {effortOptions.map((e) => (
-                  <button
-                    key={e.id}
-                    type="button"
-                    aria-pressed={e.id === effort}
-                    className={e.id === effort ? 'is-on' : ''}
-                    onClick={() => setEffort(e.id)}
-                  >
-                    {e.label}
-                  </button>
-                ))}
-              </div>
+              <EffortSlider options={effortOptions} value={effort} onChange={setEffort} />
               {effortMeta ? <div className="model-effort-hint">{effortMeta.hint}</div> : null}
             </div>
           </>

@@ -42,6 +42,11 @@
   --danger: #ff453a;
   --danger-fill: #d70015;
   --focus-ring: color-mix(in srgb, var(--accent) 45%, transparent);
+  /* 思考强度滑块的填充渐变 */
+  --effort-from: #4f5ce8;
+  --effort-to: #a173f7;
+  --effort-star: rgba(255, 255, 255, 0.85);
+  --effort-knob: #ffffff;
   --selection: color-mix(in srgb, var(--accent) 38%, transparent);
   --scrim: rgba(0, 0, 0, 0.5);
   --scroll-thumb: rgba(255, 255, 255, 0.16);
@@ -133,6 +138,8 @@
   --ink-dim: #424245;
   --ink-mute: #6e6e73;
   --accent: #007aff;
+  --effort-from: #4b57e0;
+  --effort-to: #9a63f2;
   --link: #0066cc;
   /* 浅色用 Apple 的「增强对比度」状态色，白底上的小字才看得清 */
   --ok: #248a3d;
@@ -2842,38 +2849,74 @@ b {
   color: var(--ink);
 }
 
-/* 思考强度：分段控件，选中段浮起（与 .deploy-toggle 同一种形状）。 */
-.effort-seg {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--r-sm);
+/* 思考强度：离散滑块。填充段是蓝紫渐变 + 星点，档位刻度是轨道上的小点，滑块是白色圆钮。 */
+.effort-slider {
+  --knob: 22px;
+  position: relative;
+  height: var(--knob);
+  margin: 0 2px;
+  border-radius: var(--r-pill);
   background: var(--fill);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
 }
 
-.menu .effort-seg button {
-  flex: 1;
-  width: auto;
-  align-items: center;
-  justify-content: center;
-  height: 26px;
-  padding: 0 6px;
-  border-radius: var(--r-xs);
-  font-size: 12px;
-  font-weight: var(--w-medium);
-  color: var(--ink-dim);
+.effort-slider.is-dragging {
+  cursor: grabbing;
 }
 
-.menu .effort-seg button:hover {
-  background: transparent;
-  color: var(--ink);
+.effort-slider-tick {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--t) * (100% - var(--knob)) + var(--knob) / 2);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ink-mute);
+  opacity: 0.6;
+  translate: -50% -50%;
 }
 
-.menu .effort-seg button.is-on,
-.menu .effort-seg button.is-on:hover {
-  background: var(--segment);
-  color: var(--ink);
-  box-shadow: var(--shadow-sm);
+.effort-slider-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--p) * (100% - var(--knob)) + var(--knob));
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 14% 32%, var(--effort-star) 0 0.8px, transparent 1.3px),
+    radial-gradient(circle at 27% 70%, var(--effort-star) 0 0.6px, transparent 1.1px),
+    radial-gradient(circle at 41% 26%, var(--effort-star) 0 0.9px, transparent 1.4px),
+    radial-gradient(circle at 56% 64%, var(--effort-star) 0 0.6px, transparent 1.1px),
+    radial-gradient(circle at 68% 30%, var(--effort-star) 0 0.8px, transparent 1.3px),
+    radial-gradient(circle at 83% 58%, var(--effort-star) 0 0.6px, transparent 1.1px),
+    linear-gradient(90deg, var(--effort-from), var(--effort-to));
+  background-size: 120px 100%, 120px 100%, 120px 100%, 120px 100%, 120px 100%, 120px 100%, auto;
+  background-repeat: repeat-x;
+  transition: width var(--motion-fast) var(--ease-out-expo);
+}
+
+.effort-slider-thumb {
+  position: absolute;
+  top: 0;
+  left: calc(var(--p) * (100% - var(--knob)));
+  width: var(--knob);
+  height: var(--knob);
+  border-radius: 50%;
+  background: var(--effort-knob);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), var(--shadow-sm);
+  transition: left var(--motion-fast) var(--ease-out-expo),
+              scale var(--motion-fast) var(--ease-out-expo);
+}
+
+.effort-slider.is-dragging .effort-slider-thumb {
+  scale: 1.08;
+}
+
+@media (prefers-contrast: more) {
+  .effort-slider-thumb {
+    box-shadow: 0 0 0 1.5px var(--ink), var(--shadow-sm);
+  }
 }
 
 .model-effort-hint {

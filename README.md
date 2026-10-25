@@ -58,13 +58,13 @@ py -3 grok-build-web-install.py
 - 本机 [Grok Build](https://x.ai) CLI，或让一键脚本代装（终端能执行 `grok --version`）
 - 任意现代浏览器（文件夹选择走本机系统对话框；Linux 桌面需 `zenity` 或 `kdialog`，没有时仍可手动填写路径）
 
-![空白工作台](docs/screenshots/workbench-2.png)
-
-![右侧栏](docs/screenshots/right-rail-2.png)
-
-![模型部署](docs/screenshots/model-deploy.png)
-
-![模型协议](docs/screenshots/model-deploy-protocol.png)
+| 深色 | 浅色 |
+| --- | --- |
+| ![空白工作台（深色）](docs/screenshots/workbench-3.png) | ![空白工作台（浅色）](docs/screenshots/workbench-3-light.png) |
+| ![右侧栏（深色）](docs/screenshots/right-rail-3.png) | ![右侧栏（浅色）](docs/screenshots/right-rail-3-light.png) |
+| ![模型选择（深色）](docs/screenshots/model-menu.png) | ![模型选择（浅色）](docs/screenshots/model-menu-light.png) |
+| ![模型部署（深色）](docs/screenshots/model-deploy-2.png) | ![模型部署（浅色）](docs/screenshots/model-deploy-2-light.png) |
+| ![模型协议（深色）](docs/screenshots/model-deploy-protocol-2.png) | ![模型协议（浅色）](docs/screenshots/model-deploy-protocol-2-light.png) |
 
 ## 部署
 

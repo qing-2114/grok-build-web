@@ -576,6 +576,8 @@ export function ChatPane() {
   const emptyProject = composerProject ?? activeProject
   const bottomRef = useRef<HTMLDivElement>(null)
   const threadRef = useRef<HTMLDivElement>(null)
+  const stageRef = useRef<HTMLElement>(null)
+  const dockRef = useRef<HTMLDivElement>(null)
   const prevSession = useRef<string | undefined>(undefined)
   const prevCount = useRef(0)
   const [showJump, setShowJump] = useState(false)
@@ -597,6 +599,18 @@ export function ChatPane() {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
   }, [activeSession?.id, messages.length, isThinking])
+
+  // 输入坞浮在文档流上（玻璃材质），文档流底部要留出坞的实际高度，否则最后一段被挡住。
+  useEffect(() => {
+    const dock = dockRef.current
+    const stage = stageRef.current
+    if (!dock || !stage || typeof ResizeObserver === 'undefined') return
+    const sync = () => stage.style.setProperty('--dock-h', `${Math.ceil(dock.offsetHeight)}px`)
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(dock)
+    return () => ro.disconnect()
+  }, [empty])
 
   function onScroll() {
     const el = threadRef.current
@@ -746,7 +760,7 @@ export function ChatPane() {
   }
 
   return (
-    <main className="stage">
+    <main className="stage" ref={stageRef}>
       <GrokCliBanner />
       {empty ? (
         <>
@@ -887,7 +901,7 @@ export function ChatPane() {
             </button>
           ) : null}
 
-          <div className="stage-dock">
+          <div className="stage-dock" ref={dockRef}>
             <Composer key={activeSession?.id ?? 'none'} />
           </div>
         </>

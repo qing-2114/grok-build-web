@@ -55,7 +55,7 @@ function createWindow() {
     minWidth: 880,
     minHeight: 560,
     title: 'Grok Build',
-    backgroundColor: '#000000',
+    backgroundColor: '#0f0f10',
     autoHideMenuBar: true,
     icon: icon || undefined,
     webPreferences: {
